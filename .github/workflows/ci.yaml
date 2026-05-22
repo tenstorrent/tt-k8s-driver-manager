@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: Verify generated code is up to date
+        run: |
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
+          $(go env GOPATH)/bin/controller-gen object paths=./api/...
+          $(go env GOPATH)/bin/controller-gen crd  paths=./api/...        output:crd:dir=./config/crd/bases
+          $(go env GOPATH)/bin/controller-gen rbac:roleName=tt-k8s-driver-manager paths=./internal/... output:rbac:dir=./config/rbac
+          git diff --exit-code -- api/ config/ \
+            || (echo "::error::generated files out of date — run controller-gen and commit"; exit 1)
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./... -race -count=1
+      - name: go build
+        run: go build ./...
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Helm lint
+        run: helm lint charts/tt-k8s-driver-manager
+      - name: Helm template render
+        run: helm template charts/tt-k8s-driver-manager > /tmp/rendered.yaml
