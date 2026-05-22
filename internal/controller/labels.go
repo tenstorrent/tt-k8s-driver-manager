@@ -31,4 +31,31 @@ const (
 	// /usr/local/bin/tt-smi. Empty on host-managed nodes — we don't
 	// claim ownership of tt-smi when the host already has its own.
 	LabelSMIVersion = "tt-smi.driver.tenstorrent.com/version"
+
+	// Firmware-side labels / annotations (managed by the firmware controller).
+
+	LabelUpgradeState = "firmware.tenstorrent.com/upgrade-state"
+	LabelSkip         = "firmware.tenstorrent.com/skip"
+	LabelOwnerCR      = "firmware.tenstorrent.com/owned-by"
+	LabelFWVersion    = "firmware.tenstorrent.com/fw-version"
+
+	AnnoCurrentVersion = "firmware.tenstorrent.com/current-version"
+	AnnoDesiredVersion = "firmware.tenstorrent.com/desired-version"
+	AnnoLastFlashJob   = "firmware.tenstorrent.com/last-flash-job"
+	AnnoCordonedBy     = "firmware.tenstorrent.com/cordoned-by"
+	AnnoCordonedAt     = "firmware.tenstorrent.com/cordoned-at"
+
+	JobLabelCR      = "firmware.tenstorrent.com/cr"
+	JobLabelNode    = "firmware.tenstorrent.com/node"
+	JobLabelVersion = "firmware.tenstorrent.com/version"
 )
+
+// MessageNodeConflict is set on the NodeStatus.Message when this CR's
+// selector matches a node already owned by a different CR.
+const MessageNodeConflict = "Conflict: node owned by a different TenstorrentFirmwarePolicy CR"
+
+// MessageExternalCordon is set when the node is cordoned but the cordon
+// wasn't applied by us — likely an external maintenance window. We
+// refuse to flash to avoid running tt-flash concurrent with whatever
+// the human cordoned the node for.
+const MessageExternalCordon = "node is cordoned but not by this operator"

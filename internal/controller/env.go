@@ -19,6 +19,15 @@ func requireTenstorrentLabel() bool {
 	return os.Getenv("REQUIRE_TT_PCI_LABEL") != "false"
 }
 
+// defaultFlasherImageFromEnv lets the chart override the flasher image
+// without rebuilding the controller binary.
+func defaultFlasherImageFromEnv() string {
+	if v := os.Getenv("FLASHER_IMAGE"); v != "" {
+		return v
+	}
+	return defaultFlasherImage
+}
+
 func envOrDefault(name, def string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
