@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -25,7 +25,7 @@ func jobName(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, version s
 	if len(prefix) > 48 {
 		prefix = prefix[:48]
 	}
-	h := sha1.Sum([]byte(cr.Name + "/" + nodeName + "/" + version))
+	h := sha256.Sum256([]byte(cr.Name + "/" + nodeName + "/" + version))
 	suffix := hex.EncodeToString(h[:4])
 	return strings.ToLower(fmt.Sprintf("%s-%s-%s", prefix, sanitizeVersion(version), suffix))
 }
