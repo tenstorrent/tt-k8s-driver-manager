@@ -1,0 +1,21 @@
+apiVersion: v2
+name: tt-k8s-driver-manager
+description: Manages the host-side software lifecycle for Tenstorrent hardware — tt-kmd kernel module, device firmware, and tt-smi CLI — via TenstorrentDriverPolicy and TenstorrentFirmwarePolicy CRDs.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/tenstorrent/tt-k8s-driver-manager
+sources:
+  - https://github.com/tenstorrent/tt-k8s-driver-manager
+icon: https://raw.githubusercontent.com/tenstorrent/tt-metal/main/docs/source/common/_static/favicon.png
+keywords:
+  - tenstorrent
+  - accelerator
+  - npu
+  - driver
+  - firmware
+  - kernel-module
+maintainers:
+  - name: Tenstorrent
+    url: https://github.com/tenstorrent

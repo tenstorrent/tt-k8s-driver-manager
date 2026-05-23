@@ -1,0 +1,221 @@
+# Firmware management
+
+The firmware controller flashes Tenstorrent device firmware via per-node
+`Job` pods that run `tt-flash`. State is declared via
+`TenstorrentFirmwarePolicy` (short name: `ttfwp`).
+
+## The minimum CR
+
+```yaml
+apiVersion: firmware.tenstorrent.com/v1alpha1
+kind: TenstorrentFirmwarePolicy
+metadata:
+  name: default
+spec:
+  version: "19.8.0"
+  nodeSelector: {}
+```
+
+What happens:
+
+1. Controller walks each matched node through a state machine:
+   `Pending → (Cordoning → Draining)? → Flashing → Uncordoning → Done`.
+2. For each node, a Job is created in the operator namespace using the
+   flasher image (`ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher`).
+   The Job:
+   - Reads pre-flash version via `tt-smi -s`.
+   - Downloads `fw_pack-<version>.fwbundle` from
+     `github.com/tenstorrent/tt-system-firmware` releases.
+   - Runs `tt-flash --no-color flash <bundle>` (with `--force` if
+     `spec.force=true`).
+   - Asserts post-flash readback equals `spec.readbackVersion` (default
+     `<version>.0` to match tt-ansible's convention).
+3. Job's exit code is the controller's signal — no separate readback
+   step in the reconcile loop. A non-zero exit moves the node to
+   `Failed` with the Job's last log lines surfaced in CR status.
+
+## Spec fields
+
+| Field | Default | Purpose |
+|---|---|---|
+| `version` | required | Firmware bundle version. `^[0-9]+\.[0-9]+\.[0-9]+$`. |
+| `readbackVersion` | `<version>.0` | What `tt-smi -s` should report post-flash. Override if a bundle's filename version doesn't match its readback. |
+| `bundleURL` | github tt-system-firmware release | Pin to a specific URL (mirror, internal repo, signed copy). |
+| `nodeSelector` | required | Same shape as the driver CR. |
+| `paused` | `false` | Soft stop. In-flight Jobs not interrupted; new ones don't start. |
+| `force` | `false` | Passes `--force` to tt-flash. Use for downgrades or when re-flashing the same version. |
+| `upgradePolicy.maxParallel` | `1` | Nodes flashing simultaneously across this CR. Crank up only if a bad fw bundle can't brick the fleet faster than you can `paused: true`. |
+| `upgradePolicy.flashTimeoutSeconds` | `900` | Per-node Job timeout. PCIe-only typically <120s; Galaxy headroom. |
+| `upgradePolicy.drain.enable` | `true` | Cordon+drain pods that hold `/dev/tenstorrent` before flashing. See [Drain semantics](#drain-semantics). |
+| `upgradePolicy.drain.timeoutSeconds` | `600` | Per-node drain timeout. After this, node moves to `Failed` with the blocking pod list. |
+| `upgradePolicy.drain.force` | `false` | Delete pods that have no controller (bare Pods) instead of evicting. |
+| `flasher.image` | chart's `flasher.image` | Per-CR override of the flasher image. |
+| `flasher.imagePullPolicy` | `IfNotPresent` | Override for the above. |
+
+## CR examples
+
+### Full-fleet flash
+
+```yaml
+apiVersion: firmware.tenstorrent.com/v1alpha1
+kind: TenstorrentFirmwarePolicy
+metadata: { name: fleet }
+spec:
+  version: "19.8.0"
+  nodeSelector: {}
+  upgradePolicy:
+    maxParallel: 1     # one node at a time — bad fw shouldn't lose the cluster
+    drain:
+      enable: true
+      timeoutSeconds: 600
+```
+
+### Force re-flash (same version)
+
+```yaml
+spec:
+  version: "19.8.0"
+  force: true
+```
+
+The controller will re-create Jobs for nodes already at 19.8.0 because
+`force: true` toggles a hash field on the Job — tt-flash gets `--force`,
+overwrites, readback re-asserts.
+
+### Downgrade
+
+```yaml
+spec:
+  version: "19.7.0"
+  force: true            # 19.8.0 → 19.7.0 needs --force
+  upgradePolicy:
+    maxParallel: 1       # downgrade is the riskiest direction; serial
+```
+
+### Mirror / pinned bundle
+
+```yaml
+spec:
+  version: "19.8.0"
+  bundleURL: "https://internal.example.com/fw/fw_pack-19.8.0.fwbundle"
+  readbackVersion: "19.8.0.0"   # explicit; helps when bundle metadata is odd
+```
+
+## Drain semantics
+
+When `upgradePolicy.drain.enable: true` (default), the per-node state
+machine walks: `Pending → Cordoning → Draining → Flashing → Uncordoning
+→ Done`.
+
+- **Cordoning** sets `node.spec.unschedulable=true` plus our annotation
+  `firmware.tenstorrent.com/cordoned-by=<crname>`. The annotation is
+  load-bearing: we only uncordon nodes WE cordoned, never stomping on
+  an external maintenance window's cordon.
+- **Draining** identifies "device-using pods" by hostPath mount on
+  `/dev/tenstorrent` and evicts them via the policy/v1 Eviction
+  subresource (PDB-respecting; 429s on PDB-block are surfaced as
+  transient status with retry on next reconcile). Excludes the
+  operator's own namespace and DaemonSet-owned pods.
+- **Flashing** is the actual Job described above.
+- **Uncordoning** removes the unschedulable flag + our annotation.
+
+### Drain treadmill caveat
+
+Deployment-managed pods with `tolerations: [{operator: Exists}]` bypass
+cordon (the implicit unschedulable taint is tolerated). Eviction
+succeeds; the deployment controller respawns the pod on the same
+cordoned node; eviction loops until `drain.timeoutSeconds` fires. On
+timeout the node moves to `Failed` with the blocking pod list in
+status.
+
+Workaround: don't give workloads `tolerations: Exists` unless you have
+to. Or set `drain.enable: false` on this CR (and accept that flashing
+may race against in-flight workloads).
+
+### Skipping drain on a specific node
+
+`kubectl label node <name> firmware.tenstorrent.com/skip=true` — opts
+that one node out of *all* firmware reconciliation regardless of
+selector. Separate from the driver-side `driver.tenstorrent.com/skip`.
+
+## Upgrade flow
+
+Same pattern as the driver: patch `spec.version`. Per-node Jobs roll
+through with whatever parallelism + drain config is set:
+
+```bash
+kubectl patch ttfwp default --type merge -p '{"spec":{"version":"19.9.0"}}'
+```
+
+The controller is **idempotent at the Job level**: a Job for
+`(CR, node, version)` is created at most once. If the same flash is
+re-requested (e.g. you `kubectl delete pod` a stuck flasher) the
+Complete Job is reused as evidence that this node is done.
+
+### Watch progress
+
+```bash
+$ kubectl get ttfwp default
+NAME      VERSION   MATCHED   UPTODATE   INPROGRESS   FAILED   AGE
+default   19.9.0    3         2          1            0        3m
+
+$ kubectl get ttfwp default -o jsonpath='{.status.nodes}' | jq
+[
+  {"name":"e01cs01","currentVersion":"19.9.0.0","state":"Done"},
+  {"name":"e01cs02","currentVersion":"19.9.0.0","state":"Done"},
+  {"name":"e01cs03","currentVersion":"19.8.0.0","state":"Flashing",
+   "lastFlashJob":"ttfwp-default-e01cs03-19-9-0-abc1234"}
+]
+```
+
+### Watch the flasher Job
+
+```bash
+$ kubectl -n tt-operator-system get jobs -l firmware.tenstorrent.com/cr=default
+NAME                                       STATUS    COMPLETIONS   DURATION
+ttfwp-default-e01cs01-19-9-0-abc1234       Complete  1/1           34s
+ttfwp-default-e01cs02-19-9-0-abc1234       Complete  1/1           36s
+ttfwp-default-e01cs03-19-9-0-abc1234       Running   0/1           18s
+
+$ kubectl -n tt-operator-system logs job/ttfwp-default-e01cs03-19-9-0-abc1234
+[flasher] pre-flash: tt-smi -s
+[flasher] pre-flash versions: 19.8.0.0 19.8.0.0 19.8.0.0 ...
+[flasher] flash: tt-flash --no-color flash --fw-tar /work/bundle.fwbundle
+Stage: DETECT (8 chips)
+Stage: FLASH (~30s)
+...
+```
+
+## Node labels + annotations
+
+| Field | Where | Purpose |
+|---|---|---|
+| `firmware.tenstorrent.com/fw-version` | label | currentVersion after a successful flash |
+| `firmware.tenstorrent.com/owned-by` | label | which CR is reconciling this node (first-write-wins) |
+| `firmware.tenstorrent.com/upgrade-state` | label | per-node SM position |
+| `firmware.tenstorrent.com/current-version` | annotation | readback after last flash |
+| `firmware.tenstorrent.com/last-flash-job` | annotation | most recent flash Job name |
+| `firmware.tenstorrent.com/cordoned-by` | annotation | the CR that cordoned (so we only uncordon what we cordoned) |
+| `firmware.tenstorrent.com/cordoned-at` | annotation | RFC3339 — drain timeout reference |
+
+## kubectl plugin
+
+`kubectl-tt-fw` collapses CR + per-node state + last Job into a single
+table. Install via `make install-plugins`.
+
+```bash
+kubectl tt fw                # per-CR table
+kubectl tt fw logs <crname>  # tail logs from in-flight Jobs
+```
+
+## What's out of v1
+
+- Galaxy / TG out-of-band firmware (the flasher only does PCIe in-band).
+- Tensix harvesting bundle regeneration.
+- LLMBox `tt-topo` post-flash mesh config.
+- Cluster-wide reservation via `tt-orchestration` Allocation CR (when
+  running alongside CI / dev that also consumes nodes — coordinate
+  out-of-band today).
+
+See `docs/firmware-operator-design.md` (deferred) for what each of
+these will look like.

@@ -1,0 +1,21 @@
+# aus2-dev2 first-flash policy.
+#
+# Targets every node that NFD labels with a Tenstorrent PCI device on this
+# cluster. The operator AND's in the NFD label, so an empty matchLabels
+# selector is safe (won't accidentally hit the head node).
+#
+# drain.enable: false because drain isn't implemented in v1.
+# Allocation integration was scrubbed (not part of v1).
+apiVersion: firmware.tenstorrent.com/v1alpha1
+kind: TenstorrentFirmwarePolicy
+metadata:
+  name: aus2-dev2-latest
+spec:
+  # Latest stable from tenstorrent/tt-system-firmware releases (as of 2026-05-14).
+  version: "19.9.0"
+  nodeSelector: {}
+  upgradePolicy:
+    maxParallel: 1
+    flashTimeoutSeconds: 900
+    drain:
+      enable: false

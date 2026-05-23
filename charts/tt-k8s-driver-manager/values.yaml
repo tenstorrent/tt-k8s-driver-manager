@@ -1,0 +1,39 @@
+# tt-k8s-driver-manager chart values.
+#
+# The CRD (TenstorrentDriverPolicy) is installed via Helm's native `crds/`
+# directory mechanism — applied on first install, NOT removed on
+# `helm uninstall` (Helm convention). Schema upgrades require a manual
+# `kubectl apply -f charts/tt-k8s-driver-manager/crds/`.
+#
+# This chart does NOT bundle node-feature-discovery — the tt-operator
+# chart already installs it. The controller looks for NFD's native
+# PCI-presence label feature.node.kubernetes.io/pci-1200_1e52.present=true;
+# set controller.requireTenstorrentLabel=false on dev clusters where NFD
+# isn't labeling nodes.
+
+controller:
+  image: ghcr.io/tenstorrent/tt-k8s-driver-manager-controller:dev
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+  leaderElection: false
+  requireTenstorrentLabel: "true"
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# Image the controller spawns as the per-node DaemonSet pod. Builds
+# tt-kmd against the host's kernel headers, caches the .ko on a host
+# volume, and insmods into the host kernel. Passed via DRIVER_IMAGE
+# env; every TenstorrentDriverPolicy uses this unless overridden via
+# spec.installer.image.
+driver:
+  image: ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:dev
+
+# Image the controller spawns as the per-node firmware flash Job.
+# Bundles tt-flash + tt-smi; passed to per-Job pods via FLASHER_IMAGE.
+flasher:
+  image: ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher:dev

@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tt-k8s-driver-manager.fullname" . }}-controller
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tt-k8s-driver-manager.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.controller.replicas }}
+  selector:
+    matchLabels:
+      {{- include "tt-k8s-driver-manager.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        {{- include "tt-k8s-driver-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: {{ include "tt-k8s-driver-manager.fullname" . }}-controller
+      priorityClassName: system-cluster-critical
+      containers:
+        - name: manager
+          image: {{ .Values.controller.image }}
+          imagePullPolicy: {{ .Values.controller.imagePullPolicy }}
+          args:
+            - --leader-elect={{ .Values.controller.leaderElection }}
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:8080
+          env:
+            - name: OPERATOR_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - name: DRIVER_IMAGE
+              value: {{ .Values.driver.image | quote }}
+            - name: FLASHER_IMAGE
+              value: {{ .Values.flasher.image | quote }}
+            - name: REQUIRE_TT_PCI_LABEL
+              value: {{ .Values.controller.requireTenstorrentLabel | quote }}
+            - name: INSTALLER_SERVICE_ACCOUNT
+              value: {{ include "tt-k8s-driver-manager.fullname" . }}-installer
+          ports:
+            - { name: metrics, containerPort: 8080 }
+            - { name: probe,   containerPort: 8081 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: probe }
+            initialDelaySeconds: 15
+          readinessProbe:
+            httpGet: { path: /readyz, port: probe }
+            initialDelaySeconds: 5
+          resources: {{- toYaml .Values.controller.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true

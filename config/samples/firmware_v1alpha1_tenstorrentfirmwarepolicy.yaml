@@ -1,0 +1,17 @@
+# Production-style sample: targets a node pool, drain ON (assumes the
+# cluster has more than one node so cordon/drain is safe).
+apiVersion: firmware.tenstorrent.com/v1alpha1
+kind: TenstorrentFirmwarePolicy
+metadata:
+  name: prod-blackhole
+spec:
+  version: "19.8.0"
+  nodeSelector:
+    matchLabels:
+      node-role.tenstorrent.com/pool: blackhole
+  upgradePolicy:
+    maxParallel: 1
+    flashTimeoutSeconds: 900
+    drain:
+      enable: true
+      timeoutSeconds: 600

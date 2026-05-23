@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+"""kubectl-tt-fw — TenstorrentFirmwarePolicy operator companion.
+
+Drop on $PATH and use as `kubectl tt fw`. kubectl auto-discovers binaries
+named `kubectl-<subcommand>`.
+
+Subcommands:
+  status (default)        Per-policy / per-node table
+  logs <cr> [node]        Tail the most recent flash Job pod
+  retry <cr> <node>       Delete the Job; controller respawns
+  clear <node>            Strip operator labels/annotations from a node
+
+Env:
+  TT_OPERATOR_NAMESPACE   default: tt-operator-system
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import subprocess
+import sys
+import time
+from typing import Any
+
+NS = os.environ.get("TT_OPERATOR_NAMESPACE", "tt-operator-system")
+
+USAGE = __doc__
+
+
+def kubectl(*args: str, check: bool = True) -> str:
+    p = subprocess.run(["kubectl", *args], capture_output=True, text=True)
+    if check and p.returncode != 0:
+        sys.stderr.write(p.stderr)
+        sys.exit(p.returncode)
+    return p.stdout
+
+
+def kubectl_passthrough(*args: str) -> None:
+    """Run kubectl streaming directly to the user's terminal (for logs -f)."""
+    os.execvp("kubectl", ["kubectl", *args])
+
+
+def age(ts: str | None) -> str:
+    if not ts:
+        return "-"
+    # `Z` suffix is UTC; strptime returns a naive datetime which would be
+    # interpreted as *local* time by .timestamp(), giving wrong ages on non-UTC laptops.
+    t = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=datetime.timezone.utc
+    ).timestamp()
+    s = max(0, int(time.time() - t))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s//60}m"
+    if s < 86400:
+        return f"{s//3600}h"
+    return f"{s//86400}d"
+
+
+# ANSI colors: only if stdout is a tty.
+_USE_COLOR = sys.stdout.isatty()
+
+
+def color(state: str) -> tuple[str, str]:
+    if not _USE_COLOR:
+        return "", ""
+    if state == "Failed":
+        return "\033[31m", "\033[0m"
+    if state == "Flashing":
+        return "\033[36m", "\033[0m"
+    if state == "Done":
+        return "\033[32m", "\033[0m"
+    return "", ""
+
+
+def cmd_status(argv: list[str]) -> None:
+    raw = kubectl("get", "ttfwp", "-o", "json")
+    data = json.loads(raw or "{}")
+    items: list[dict[str, Any]] = data.get("items", [])
+    if not items:
+        print("(no TenstorrentFirmwarePolicy resources)")
+        return
+
+    for cr in items:
+        name = cr["metadata"]["name"]
+        spec = cr.get("spec", {}) or {}
+        st = cr.get("status", {}) or {}
+        summary = st.get("summary", {}) or {}
+        nodes = sorted(st.get("nodes", []) or [], key=lambda n: n.get("name", ""))
+        paused = " [PAUSED]" if spec.get("paused") else ""
+
+        print(f"POLICY: {name}{paused}")
+        print(
+            f"  version: {spec.get('version','?'):<10} "
+            f"matched: {summary.get('matched',0):<3} "
+            f"upToDate: {summary.get('upToDate',0):<3} "
+            f"inProgress: {summary.get('inProgress',0):<3} "
+            f"failed: {summary.get('failed',0):<3}"
+        )
+        if not nodes:
+            print("  (no matching nodes)\n")
+            continue
+
+        print()
+        print(f"  {'NODE':<22} {'STATE':<10} {'CURRENT':<12} {'AGE':<6} JOB / MESSAGE")
+        for n in nodes:
+            nm = n.get("name", "")
+            state = n.get("state", "")
+            cur = n.get("currentVersion", "-")
+            job = n.get("lastFlashJob", "-")
+            msg = n.get("message", "")
+            a = age(n.get("lastTransitionTime"))
+            c, reset = color(state)
+            tail = msg if (msg and state in ("Failed", "Pending")) else job
+            print(f"  {nm:<22} {c}{state:<10}{reset} {cur:<12} {a:<6} {tail}")
+        print()
+
+
+def cmd_logs(argv: list[str]) -> None:
+    if not argv:
+        sys.exit("usage: kubectl tt fw logs <cr> [node]")
+    cr = argv[0]
+    node = argv[1] if len(argv) > 1 else None
+    sel = f"firmware.tenstorrent.com/cr={cr}"
+    if node:
+        sel += f",firmware.tenstorrent.com/node={node}"
+    sys.stderr.write(f"tailing pods with selector: {sel}\n")
+    kubectl_passthrough(
+        "-n", NS, "logs", "-f", "-l", sel, "--tail=200", "--max-log-requests=8"
+    )
+
+
+def cmd_retry(argv: list[str]) -> None:
+    if len(argv) < 2:
+        sys.exit("usage: kubectl tt fw retry <cr> <node>")
+    cr, node = argv[0], argv[1]
+    kubectl(
+        "-n", NS, "delete", "job",
+        "-l", f"firmware.tenstorrent.com/cr={cr},firmware.tenstorrent.com/node={node}",
+        check=False,
+    )
+    # Clear stale per-node label so the controller picks the node up fresh.
+    kubectl(
+        "label", "node", node,
+        "firmware.tenstorrent.com/upgrade-state-",
+        "--overwrite",
+        check=False,
+    )
+    print("retry triggered; controller will respawn on next reconcile.")
+
+
+def cmd_clear(argv: list[str]) -> None:
+    if not argv:
+        sys.exit("usage: kubectl tt fw clear <node>")
+    node = argv[0]
+    kubectl(
+        "label", "node", node,
+        "firmware.tenstorrent.com/upgrade-state-",
+        "firmware.tenstorrent.com/owned-by-",
+        "firmware.tenstorrent.com/skip-",
+        "--overwrite",
+        check=False,
+    )
+    kubectl(
+        "annotate", "node", node,
+        "firmware.tenstorrent.com/desired-version-",
+        "firmware.tenstorrent.com/last-flash-job-",
+        "firmware.tenstorrent.com/current-version-",
+        "--overwrite",
+        check=False,
+    )
+
+
+def main() -> None:
+    argv = sys.argv[1:]
+    sub = argv[0] if argv else "status"
+    rest = argv[1:]
+    table = {
+        "status": cmd_status,
+        "": cmd_status,
+        "logs": cmd_logs,
+        "retry": cmd_retry,
+        "clear": cmd_clear,
+    }
+    if sub in ("-h", "--help", "help"):
+        print(USAGE)
+        return
+    fn = table.get(sub)
+    if not fn:
+        sys.stderr.write(f"unknown subcommand: {sub}\n{USAGE}\n")
+        sys.exit(1)
+    fn(rest)
+
+
+if __name__ == "__main__":
+    main()
