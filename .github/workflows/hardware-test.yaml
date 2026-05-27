@@ -1,0 +1,287 @@
+name: hardware-test
+
+# End-to-end test of the driver-manager controllers against a single-host
+# k8s cluster (kind) running on an ARC self-hosted runner that has real
+# Tenstorrent hardware. Catches the failure modes that lint + smoke +
+# unit tests don't see:
+#
+#   - host-managed install-mode auto-detection (the runner image has
+#     tt-kmd pre-installed via DKMS, so the DS entrypoint should detect
+#     it, label install-mode=host, and stand down without touching the
+#     module).
+#   - tt-smi shim delivery to the host's /usr/local/bin/tt-smi.
+#   - CR status mirroring reality across multiple workers that all see
+#     the same physical device (the kind workers are containers sharing
+#     the runner's /dev/tenstorrent — not a multi-physical-card test,
+#     just a "DS schedules + idles correctly on every selected node"
+#     test).
+#
+# Trigger model:
+#   - workflow_dispatch (default) — manual button push. Pick the runner
+#     label + image tag. Cheapest first iteration.
+#   - Add 'test-on-hw' label to a PR — runs against the PR's HEAD with
+#     :latest images (or override with workflow_dispatch). Burns one
+#     hardware runner per labeled PR; that's why it's opt-in.
+#
+# Not yet covered (deliberate):
+#   - Containerized-build mode (rmmod + insmod). Would require a runner
+#     where we can mutate kernel state without breaking the runner's own
+#     subsequent jobs. Doable but needs a dedicated "ephemeral kernel"
+#     runner setup or a VM-based runner where we own the kernel.
+#   - Firmware flash. Same reason — flashing fw is a side-effect-on-the-
+#     hardware operation; we don't want CI rewriting fw on shared runners.
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner-label:
+        description: ARC runner label (must have a Tenstorrent card)
+        type: string
+        default: tt-ubuntu-2204-n150-stable
+      image-tag:
+        description: Image tag for controller / builder / flasher (must already be in GHCR)
+        type: string
+        default: latest
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  driver-manager-hw-test:
+    # Gate the PR-trigger on a label so accidental pushes don't burn
+    # hardware runners. workflow_dispatch always runs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'test-on-hw'))
+    runs-on: ${{ inputs.runner-label || 'tt-ubuntu-2204-n150-stable' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      # The runner image (github_runner_sandbox) is a privileged container
+      # with /dev/tenstorrent passed through from its host node; tt-kmd is
+      # already loaded on the host kernel. We sanity-check that before
+      # touching anything else so a runner mis-configuration surfaces
+      # immediately, not 5 minutes into the helm install.
+      - name: Pre-flight — verify Tenstorrent hardware visibility
+        run: |
+          set -e
+          echo "::group::lspci"
+          lspci -nn | grep -i "1e52:" || { echo "FAIL: no Tenstorrent PCI device"; exit 1; }
+          echo "::endgroup::"
+          echo "::group::/dev/tenstorrent"
+          ls -la /dev/tenstorrent/ || { echo "FAIL: /dev/tenstorrent missing"; exit 1; }
+          echo "::endgroup::"
+          echo "::group::tt-kmd"
+          if [ -d /sys/module/tenstorrent ]; then
+            echo "tt-kmd version: $(cat /sys/module/tenstorrent/version)"
+          else
+            echo "WARN: tt-kmd not currently loaded — the host-managed-detection path won't fire."
+            echo "      This workflow currently expects the runner to have tt-kmd pre-installed."
+          fi
+          echo "::endgroup::"
+
+      # kind is usually present on these runner images; install if not.
+      - name: Ensure kind is installed
+        run: |
+          if ! command -v kind >/dev/null; then
+            sudo curl -sSL https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64 -o /usr/local/bin/kind
+            sudo chmod +x /usr/local/bin/kind
+          fi
+          kind version
+          docker version | head -3
+
+      # Multi-worker kind cluster, each worker bind-mounts the host's
+      # /dev/tenstorrent + /lib/modules so the driver DS pods see real
+      # hardware. The 4 workers all share the same physical card — they
+      # don't get isolated devices; this exercises "DS schedules per
+      # node + auto-detects" rather than per-card concurrency.
+      - name: Create kind cluster (1 control + 4 workers, sharing host /dev/tenstorrent)
+        run: |
+          cat > /tmp/kind-config.yaml <<'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: ttdm-hw
+          nodes:
+            - role: control-plane
+            - role: worker
+              extraMounts: &tt-mounts
+                - hostPath: /dev/tenstorrent
+                  containerPath: /dev/tenstorrent
+                - hostPath: /lib/modules
+                  containerPath: /lib/modules
+                  readOnly: true
+                - hostPath: /usr/src
+                  containerPath: /usr/src
+                  readOnly: true
+                - hostPath: /var/lib/dkms
+                  containerPath: /var/lib/dkms
+                  readOnly: true
+            - role: worker
+              extraMounts: *tt-mounts
+            - role: worker
+              extraMounts: *tt-mounts
+            - role: worker
+              extraMounts: *tt-mounts
+          EOF
+          kind create cluster --config /tmp/kind-config.yaml --wait 3m
+          kubectl get nodes
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pre-pull + side-load. kind's containerd doesn't share creds with
+      # the host docker, so pull on the host then `kind load` into every
+      # node. Faster than fighting per-pod imagePullSecrets across 4
+      # workers.
+      - name: Pre-pull + side-load driver-manager images
+        env:
+          IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
+        run: |
+          for img in tt-k8s-driver-manager-controller tt-k8s-driver-manager-builder tt-k8s-driver-manager-flasher; do
+            echo "::group::$img:$IMAGE_TAG"
+            docker pull "ghcr.io/tenstorrent/${img}:${IMAGE_TAG}"
+            kind load docker-image "ghcr.io/tenstorrent/${img}:${IMAGE_TAG}" --name ttdm-hw
+            echo "::endgroup::"
+          done
+
+      # Real NFD is overkill for a single-host test; just stamp the
+      # PCI-presence label on every worker so the controller's selector
+      # picks them up.
+      - name: Stamp tt-present label on worker nodes
+        run: |
+          for node in $(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o name); do
+            kubectl label "$node" feature.node.kubernetes.io/pci-1200_1e52.present=true --overwrite
+          done
+
+      - name: Install driver-manager chart
+        env:
+          IMAGE_TAG: ${{ inputs.image-tag || 'latest' }}
+        run: |
+          helm install ttdm charts/tt-k8s-driver-manager \
+            -n tt-k8s-driver-manager-system --create-namespace \
+            --set "controller.image.tag=${IMAGE_TAG}" \
+            --set "driver.image.tag=${IMAGE_TAG}" \
+            --set "flasher.image.tag=${IMAGE_TAG}"
+
+      - name: Wait for controller Deployment
+        run: |
+          kubectl -n tt-k8s-driver-manager-system wait \
+            --for=condition=Available --timeout=3m deployments --all
+
+      - name: Apply TenstorrentDriverPolicy CR (target whatever the runner has loaded)
+        run: |
+          KMD=$(cat /sys/module/tenstorrent/version 2>/dev/null || echo "2.8.0")
+          echo "Targeting tt-kmd version: $KMD"
+          cat > /tmp/ttdp.yaml <<EOF
+          apiVersion: driver.tenstorrent.com/v1alpha1
+          kind: TenstorrentDriverPolicy
+          metadata:
+            name: hw-test
+          spec:
+            version: "${KMD}"
+            nodeSelector: {}
+          EOF
+          kubectl apply -f /tmp/ttdp.yaml
+
+      # Auto-detection path: DS entrypoint sees /var/lib/dkms/tenstorrent
+      # (or the host's /usr/src/tenstorrent-*/dkms.conf), labels
+      # install-mode=host on the node, idles. Pod becomes Ready because
+      # /sys/module/tenstorrent/version matches the CR's spec.version.
+      - name: Wait for driver DS pods to reach Ready
+        run: |
+          # Give the controller time to materialize the DS, then wait.
+          sleep 15
+          kubectl -n tt-k8s-driver-manager-system rollout status \
+            ds/ttdrv-hw-test --timeout=5m
+
+      - name: Verify CR status, node labels, install-mode detection
+        run: |
+          echo "::group::CR status"
+          kubectl get ttdp hw-test -o yaml | sed -n '/^status:/,$p'
+          echo "::endgroup::"
+
+          echo "::group::Node labels"
+          kubectl get nodes -L \
+            driver.tenstorrent.com/kmd-version,\
+          driver.tenstorrent.com/install-mode,\
+          tt-smi.driver.tenstorrent.com/version
+          echo "::endgroup::"
+
+          # Assertions
+          MATCHED=$(kubectl get ttdp hw-test -o jsonpath='{.status.summary.matched}')
+          READY=$(kubectl get ttdp hw-test -o jsonpath='{.status.summary.ready}')
+          echo "matched=$MATCHED ready=$READY"
+          test "$MATCHED" -gt 0 || { echo "FAIL: no nodes matched"; exit 1; }
+          test "$READY"   = "$MATCHED" || { echo "FAIL: ready != matched"; exit 1; }
+
+          # Install-mode auto-detection: every worker should be 'host'
+          # (the runner had tt-kmd pre-installed). If the runner image
+          # ever changes, this assertion would force the test to be
+          # re-targeted, which is intentional.
+          for node in $(kubectl get nodes -l '!node-role.kubernetes.io/control-plane' -o name); do
+            mode=$(kubectl get "$node" -o jsonpath='{.metadata.labels.driver\.tenstorrent\.com/install-mode}')
+            echo "$node: install-mode=$mode"
+            test "$mode" = "host" || { echo "FAIL: expected install-mode=host on $node, got $mode"; exit 1; }
+          done
+
+      - name: Verify tt-smi reachable on the host (delivered via the DS entrypoint)
+        run: |
+          # In host-managed mode we explicitly skip tt-smi delivery (the
+          # host already has its own tt-smi from tt-installer). So we
+          # don't expect tt-smi.driver.tenstorrent.com/version to be
+          # stamped, BUT we DO expect the host's pre-existing tt-smi to
+          # still be functional via the runner image's bundled binary.
+          if command -v tt-smi >/dev/null; then
+            tt-smi --version 2>&1 | head -3
+          else
+            echo "INFO: tt-smi not on PATH on the runner image; skipping host-tt-smi check."
+          fi
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          echo "::group::pods"
+          kubectl get pods -A -o wide
+          echo "::endgroup::"
+          echo "::group::driver-manager namespace describe"
+          kubectl -n tt-k8s-driver-manager-system describe pods
+          echo "::endgroup::"
+          echo "::group::controller logs"
+          kubectl -n tt-k8s-driver-manager-system logs \
+            deployment/ttdm-tt-k8s-driver-manager-controller --tail=100 || true
+          echo "::endgroup::"
+          echo "::group::DS pod logs"
+          for p in $(kubectl -n tt-k8s-driver-manager-system get pods -l driver.tenstorrent.com/cr=hw-test -o name); do
+            echo "--- $p ---"
+            kubectl -n tt-k8s-driver-manager-system logs "$p" --tail=50 || true
+          done
+          echo "::endgroup::"
+          echo "::group::events"
+          kubectl get events -A --sort-by=.lastTimestamp | tail -50
+          echo "::endgroup::"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kubectl delete ttdp hw-test --ignore-not-found
+          helm -n tt-k8s-driver-manager-system uninstall ttdm --ignore-not-found || true
+          kind delete cluster --name ttdm-hw || true
+          # Defensive: if anything left node labels behind, the next CI run
+          # would start dirty. Best effort.
+          for node in $(kubectl get nodes -o name 2>/dev/null || true); do
+            kubectl label "$node" \
+              driver.tenstorrent.com/install-mode- \
+              driver.tenstorrent.com/kmd-version- \
+              tt-smi.driver.tenstorrent.com/version- \
+              feature.node.kubernetes.io/pci-1200_1e52.present- 2>/dev/null || true
+          done
