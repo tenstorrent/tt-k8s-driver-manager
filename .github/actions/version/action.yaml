@@ -1,19 +1,18 @@
 name: 'Get Version Info'
 description: >
-  Computes the artifact version for this run. Ported from
-  tenstorrent/tt-fabric-manager. Resolution:
+  Computes the artifact version for this run. Modeled on
+  tenstorrent/tt-fabric-manager's pattern but uses the GitHub API
+  directly (instead of proudust/gh-describe) so it works in repos that
+  don't have any v*.*.* tags yet — gh-describe exits fatal on an empty
+  tag set, and we hit that on the first release.
 
-  - If this workflow was triggered by a `v*.*.*` git tag, the version
-    is the tag with the leading `v` stripped (e.g. `v0.2.0` → `0.2.0`).
-    Use this for clean releases.
-  - On any other push (branches, including main), the patch number
-    of the most recent `v*.*.*` tag is bumped and the result is
-    suffixed with the workflow run number + short sha (e.g. latest
-    tag `v0.2.0` + run 244 + sha abc1234 → `0.2.1-244.sha-abc1234`).
-    Sortable, unique-per-push, semver-pre-release-compliant.
-  - If no `v*.*.*` tag exists yet, falls back to
-    `0.0.0-${run_number}.sha-${short_sha}` so first-time builds still
-    produce something publishable.
+  Resolution:
+    - Triggered by a `v*.*.*` git tag → version is the tag with `v`
+      stripped (e.g. `v0.2.0` → `0.2.0`). The clean-release path.
+    - Any other push, latest `v*.*.*` tag in the repo is `v0.X.Y` →
+      `0.X.(Y+1)-<run_number>.sha-<short>`. Sortable per semver
+      pre-release rules; every push yields a unique immutable tag.
+    - No `v*.*.*` tags exist in the repo yet → `0.0.0-<run>.sha-<short>`.
 
 outputs:
   version:
@@ -23,29 +22,42 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Git describe
-      id: git-describe
-      uses: proudust/gh-describe@v2
-      with:
-        match: v*.*.*
-
     - name: Compute version
       id: get-version
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
+        set -uo pipefail
         SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-        if [ "${{ steps.git-describe.outputs.tag }}" = "" ]; then
-          echo "version=0.0.0-${{ github.run_number }}.sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+        # Pull all tags from the repo and find the highest v*.*.* via
+        # version sort. Works regardless of git checkout depth (the
+        # default shallow checkout doesn't fetch tags).
+        LATEST_TAG=$(gh api --paginate "/repos/${{ github.repository }}/tags" \
+            --jq '.[].name' 2>/dev/null \
+          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sort -V \
+          | tail -1 \
+          || true)
+
+        if [ -z "$LATEST_TAG" ]; then
+          VERSION="0.0.0-${{ github.run_number }}.sha-${SHORT_SHA}"
+          echo "No v*.*.* tags found; using fallback ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        CURRENT_VERSION="${{ steps.git-describe.outputs.tag }}"
-        CURRENT_VERSION="${CURRENT_VERSION#v}"
-        if [ "${{ github.ref_type }}" = "tag" ]; then
-          # We were triggered by the v*.*.* tag itself — return as-is.
+
+        CURRENT_VERSION="${LATEST_TAG#v}"
+
+        if [ "${{ github.ref_type }}" = "tag" ] && [ "${{ github.ref_name }}" = "$LATEST_TAG" ]; then
+          # Triggered by the v*.*.* tag itself — return as-is.
+          echo "Triggered by tag ${LATEST_TAG}; using clean ${CURRENT_VERSION}"
           echo "version=${CURRENT_VERSION}" >> "$GITHUB_OUTPUT"
         else
-          CURRENT_VERSION="${CURRENT_VERSION%-sha-*}"
           IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
-          patch=$(($patch + 1))
-          echo "version=${major}.${minor}.${patch}-${{ github.run_number }}.sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          patch=$((patch + 1))
+          VERSION="${major}.${minor}.${patch}-${{ github.run_number }}.sha-${SHORT_SHA}"
+          echo "Latest tag ${LATEST_TAG}; bumping to pre-release ${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         fi
