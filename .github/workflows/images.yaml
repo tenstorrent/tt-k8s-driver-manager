@@ -9,8 +9,17 @@ name: images
 #   - flasher:    ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher
 #                 (tt-flash + tt-smi in one image for the firmware Job)
 #
-# Triggers mirror tt-operator's: every branch push tags with the branch
-# name + short SHA so a feature branch can be deployed without merging.
+# Versioning model (ported from tenstorrent/tt-fabric-manager):
+#
+# - Chart.yaml carries `version: 0.0.0` + `appVersion: latest` as
+#   permanent sentinels — never bumped manually.
+# - .github/actions/version computes the real version per run from the
+#   latest `v*.*.*` git tag + run_number + sha. So every push to main
+#   yields a unique immutable tag like `0.2.1-244.sha-abc1234`, and a
+#   `v0.2.0` git tag yields a clean `0.2.0`.
+# - Each build is tagged with the computed version IN ADDITION TO the
+#   existing branch / sha / latest tags, so dev workflows that track
+#   `:main` or `:latest` keep working.
 
 on:
   push:
@@ -65,7 +74,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute tags
+      # Compute the artifact version from git-tag + run + sha. Same
+      # composite action that drives helm-release.yaml, so chart and
+      # images end up tagged consistently on the same commit.
+      - name: Compute version
+        id: version
+        uses: ./.github/actions/version
+
+      - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -74,9 +90,8 @@ jobs:
             type=ref,event=branch
             type=ref,event=pr
             type=sha,prefix=sha-
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=${{ github.event.inputs.extra_tag }},enable=${{ github.event.inputs.extra_tag != '' }}
 
       - name: Build and push ${{ matrix.name }}

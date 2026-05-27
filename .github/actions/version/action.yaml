@@ -1,0 +1,51 @@
+name: 'Get Version Info'
+description: >
+  Computes the artifact version for this run. Ported from
+  tenstorrent/tt-fabric-manager. Resolution:
+
+  - If this workflow was triggered by a `v*.*.*` git tag, the version
+    is the tag with the leading `v` stripped (e.g. `v0.2.0` → `0.2.0`).
+    Use this for clean releases.
+  - On any other push (branches, including main), the patch number
+    of the most recent `v*.*.*` tag is bumped and the result is
+    suffixed with the workflow run number + short sha (e.g. latest
+    tag `v0.2.0` + run 244 + sha abc1234 → `0.2.1-244.sha-abc1234`).
+    Sortable, unique-per-push, semver-pre-release-compliant.
+  - If no `v*.*.*` tag exists yet, falls back to
+    `0.0.0-${run_number}.sha-${short_sha}` so first-time builds still
+    produce something publishable.
+
+outputs:
+  version:
+    description: "Computed artifact version"
+    value: ${{ steps.get-version.outputs.version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Git describe
+      id: git-describe
+      uses: proudust/gh-describe@v2
+      with:
+        match: v*.*.*
+
+    - name: Compute version
+      id: get-version
+      shell: bash
+      run: |
+        SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+        if [ "${{ steps.git-describe.outputs.tag }}" = "" ]; then
+          echo "version=0.0.0-${{ github.run_number }}.sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        CURRENT_VERSION="${{ steps.git-describe.outputs.tag }}"
+        CURRENT_VERSION="${CURRENT_VERSION#v}"
+        if [ "${{ github.ref_type }}" = "tag" ]; then
+          # We were triggered by the v*.*.* tag itself — return as-is.
+          echo "version=${CURRENT_VERSION}" >> "$GITHUB_OUTPUT"
+        else
+          CURRENT_VERSION="${CURRENT_VERSION%-sha-*}"
+          IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+          patch=$(($patch + 1))
+          echo "version=${major}.${minor}.${patch}-${{ github.run_number }}.sha-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+        fi
