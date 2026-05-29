@@ -37,3 +37,10 @@ driver:
 # Bundles tt-flash + tt-smi; passed to per-Job pods via FLASHER_IMAGE.
 flasher:
   image: ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher:dev
+
+# Image pull secrets attached to the controller + installer
+# ServiceAccounts. Pods that use either SA inherit these — including
+# the per-node DaemonSet pods the controller spawns when CRs are
+# applied. Leave empty for public images or when GHCR creds are
+# already injected via a namespace-default ServiceAccount.
+imagePullSecrets: []
