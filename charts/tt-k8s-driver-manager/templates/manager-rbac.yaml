@@ -4,6 +4,10 @@ metadata:
   name: {{ include "tt-k8s-driver-manager.fullname" . }}-controller
   namespace: {{ .Release.Namespace }}
   labels: {{- include "tt-k8s-driver-manager.labels" . | nindent 4 }}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -63,6 +67,10 @@ metadata:
   name: {{ include "tt-k8s-driver-manager.fullname" . }}-installer
   namespace: {{ .Release.Namespace }}
   labels: {{- include "tt-k8s-driver-manager.labels" . | nindent 4 }}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole

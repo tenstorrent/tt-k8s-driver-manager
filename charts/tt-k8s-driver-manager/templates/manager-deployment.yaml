@@ -18,6 +18,10 @@ spec:
     spec:
       serviceAccountName: {{ include "tt-k8s-driver-manager.fullname" . }}-controller
       priorityClassName: system-cluster-critical
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: manager
           image: {{ .Values.controller.image }}
