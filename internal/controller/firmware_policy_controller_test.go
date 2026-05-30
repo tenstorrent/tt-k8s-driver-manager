@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -13,6 +14,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	firmwarev1alpha1 "github.com/tenstorrent/tt-k8s-driver-manager/api/firmware/v1alpha1"
 )
@@ -511,7 +513,8 @@ func TestReconcile_PausedNoOp(t *testing.T) {
 	}
 }
 
-// MaxParallel caps the number of simultaneously-running Jobs.
+// MaxParallel caps the number of simultaneously-running Jobs. Single-reconcile
+// version: 5 Pending nodes, maxParallel=2 → exactly 2 Jobs after one reconcile.
 func TestReconcile_MaxParallelBound(t *testing.T) {
 	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
 	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
@@ -544,6 +547,177 @@ func TestReconcile_MaxParallelBound(t *testing.T) {
 	}
 	if len(jobs.Items) != 2 {
 		t.Fatalf("maxParallel=2 should spawn 2 Jobs, got %d", len(jobs.Items))
+	}
+}
+
+// Regression for the production "4-node policy with maxParallel=1 spawned 4
+// Jobs within 90s" bug. The scenario: every node starts Pending (no flash
+// Job exists). The original control flow counted in-flight from the observed
+// per-node state — which is itself derived only from the per-node Job lookup —
+// so any cross-reconcile drift between "Job exists" and "node state == Flashing"
+// would let a fresh reconcile see all nodes as Pending and spawn another Job.
+//
+// This test exercises the regression path by:
+//  1. starting with 4 Pending nodes and maxParallel=1
+//  2. running reconcile multiple times in a row (simulating the controller-runtime
+//     re-reconcile that fires on every Job watch event)
+//  3. asserting the total Job count never exceeds maxParallel
+func TestReconcile_MaxParallelOneAcrossReconciles(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	disable := false
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &disable
+	cr.Spec.UpgradePolicy.MaxParallel = 1
+
+	objs := []runtime.Object{cr}
+	for _, name := range []string{"a", "b", "c", "d"} {
+		objs = append(objs, toClientObject(node(name, nil)))
+	}
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(toClientObjects(objs)...).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+
+	for i := 0; i < 8; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+		var jobs batchv1.JobList
+		if err := r.List(context.Background(), &jobs); err != nil {
+			t.Fatalf("list jobs: %v", err)
+		}
+		// Count unfinished Jobs — those are what consume parallelism slots.
+		inFlight := 0
+		for j := range jobs.Items {
+			completed, _ := jobFinished(&jobs.Items[j])
+			if !completed {
+				inFlight++
+			}
+		}
+		if inFlight > 1 {
+			t.Fatalf("maxParallel=1 violated after reconcile %d: %d in-flight Jobs", i, inFlight)
+		}
+	}
+
+	// And we should have spawned exactly one Job total (since none ever
+	// finishes in this test).
+	var jobs batchv1.JobList
+	_ = r.List(context.Background(), &jobs)
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected exactly 1 Job after repeated reconciles with maxParallel=1; got %d", len(jobs.Items))
+	}
+}
+
+// Regression for the cross-pass slot-leak: if spawnFlashJob successfully
+// Creates the Job but a subsequent annotate/label Patch on the node fails,
+// the previous code returned (advanced=false, err) without marking the
+// per-node state Flashing — so the reconcile loop kept the capacity slot
+// "open" and spawned another Job for a different Pending node despite a
+// Job already existing on the apiserver.
+//
+// The fix moves ns.State = Flashing to immediately after Create succeeds
+// so the capacity accounting sees the slot consumed regardless of any
+// downstream Patch failure.
+func TestReconcile_MaxParallelOne_AnnotatePatchFailureDoesNotLeakSlot(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	disable := false
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &disable
+	cr.Spec.UpgradePolicy.MaxParallel = 1
+
+	objs := []runtime.Object{cr}
+	// Pre-set the owner label so claimOwnership is a no-op — we want the
+	// patch failure to fall on annotateNode (after spawnFlashJob's Create
+	// succeeds), not on claimOwnership before it.
+	for _, name := range []string{"a", "b", "c", "d"} {
+		objs = append(objs, toClientObject(node(name, map[string]string{LabelOwnerCR: cr.Name})))
+	}
+
+	// Inject a Patch failure for nodes. With owner-label pre-set,
+	// claimOwnership is a no-op; spawnFlashJob's Create succeeds; the
+	// failure lands on annotateNode. The bug: ns.State was only set to
+	// Flashing after both patches succeeded — so the loop kept the
+	// capacity slot "open" and spawned the next Pending node's Job too.
+	patchFail := errors.New("simulated patch failure")
+	c := fake.NewClientBuilder().
+		WithScheme(testScheme(t)).
+		WithObjects(toClientObjects(objs)...).
+		WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				if _, ok := obj.(*corev1.Node); ok {
+					return patchFail
+				}
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		}).
+		Build()
+
+	r := &FirmwarePolicyReconciler{Scheme: testScheme(t), Client: c}
+
+	// Even when every node patch fails, maxParallel=1 must still cap Jobs at 1.
+	for i := 0; i < 5; i++ {
+		_, _ = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}})
+		var jobs batchv1.JobList
+		if err := r.List(context.Background(), &jobs); err != nil {
+			t.Fatalf("list jobs: %v", err)
+		}
+		if len(jobs.Items) > 1 {
+			t.Fatalf("maxParallel=1 violated after reconcile %d: %d Jobs created", i, len(jobs.Items))
+		}
+	}
+}
+
+// As above, but with maxParallel=2: across many reconciles, at most 2 Jobs
+// are ever in flight simultaneously.
+func TestReconcile_MaxParallelTwoAcrossReconciles(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	disable := false
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &disable
+	cr.Spec.UpgradePolicy.MaxParallel = 2
+
+	objs := []runtime.Object{cr}
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		objs = append(objs, toClientObject(node(name, nil)))
+	}
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(toClientObjects(objs)...).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+
+	for i := 0; i < 8; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+		var jobs batchv1.JobList
+		if err := r.List(context.Background(), &jobs); err != nil {
+			t.Fatalf("list jobs: %v", err)
+		}
+		inFlight := 0
+		for j := range jobs.Items {
+			completed, _ := jobFinished(&jobs.Items[j])
+			if !completed {
+				inFlight++
+			}
+		}
+		if inFlight > 2 {
+			t.Fatalf("maxParallel=2 violated after reconcile %d: %d in-flight Jobs", i, inFlight)
+		}
 	}
 }
 
