@@ -63,13 +63,16 @@ heal_cards() {
 # only one stream loses the useful signal.
 tt_smi_snapshot() {
   local label="$1"
-  local err_file
+  local err_file rc
   err_file=$(mktemp)
-  if TT_SMI_OUT=$(tt-smi -s 2>"$err_file"); then
+  # Capture tt-smi's exit code immediately. Don't put the command inside the
+  # `if` test — after a failed `if` with no matched branch, $? is 0 (bash
+  # spec), so `local rc=$?` would mask real failures.
+  TT_SMI_OUT=$(tt-smi -s 2>"$err_file"); rc=$?
+  if [[ $rc -eq 0 ]]; then
     rm -f "$err_file"
     return 0
   fi
-  local rc=$?
   local err
   err=$(cat "$err_file" 2>/dev/null || true)
   rm -f "$err_file"
