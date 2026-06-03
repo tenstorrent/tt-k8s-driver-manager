@@ -19,6 +19,42 @@ set -euo pipefail
 
 log() { printf '[flasher] %s\n' "$*" >&2; }
 
+# is_galaxy returns 0 if any Tenstorrent device on this host is a Galaxy UBB
+# variant, 1 otherwise. Reads PCI subsystem IDs from /sys (kernel-populated
+# via PCI core, no tt-kmd driver state needed — works on wedged cards as
+# long as PCIe enumeration succeeded at boot).
+#
+# IDs match tt-kmd/enumerate.c:
+#   0x0035 = Wormhole Galaxy UBB
+#   0x0047 = Blackhole Galaxy UBB
+is_galaxy() {
+  shopt -s nullglob
+  for d in /sys/bus/pci/devices/*; do
+    [[ "$(cat "$d/vendor" 2>/dev/null)" == "0x1e52" ]] || continue
+    case "$(cat "$d/subsystem_device" 2>/dev/null)" in
+      0x0035|0x0047) shopt -u nullglob; return 0 ;;
+    esac
+  done
+  shopt -u nullglob
+  return 1
+}
+
+# heal_cards attempts a single hardware reset cycle when the pre-flash
+# tt-smi readback fails. Galaxy hosts need an IPMI tray power-cycle
+# (tt-smi -glx_reset); PCIe-attached single-card hosts only need
+# USER_RESET via the kernel driver (tt-smi -r).
+heal_cards() {
+  if is_galaxy; then
+    log "heal: Galaxy host (PCI subsystem 0x0035/0x0047) → tt-smi -glx_reset"
+    tt-smi -glx_reset || log "heal: tt-smi -glx_reset exited non-zero"
+  else
+    log "heal: PCIe-only host → tt-smi -r"
+    tt-smi -r || log "heal: tt-smi -r exited non-zero"
+  fi
+  # Give PCIe / the driver a moment to re-enumerate.
+  sleep 5
+}
+
 # tt_smi_snapshot runs `tt-smi -s` capturing both streams + exit code.
 # On success: $TT_SMI_OUT contains the JSON stdout; rc=0.
 # On failure: dumps everything to the log so debugging from `kubectl logs`
@@ -65,30 +101,41 @@ if [[ "${MOCK:-false}" == "true" ]]; then
 fi
 
 # --- 1. Pre-flash readback ------------------------------------------------
-# Capture current fw_bundle_versions from tt-smi -s. Failure is tolerated
-# only if TT_FORCE=true (matches the `rescue:` block in tt-ansible's
-# tt_firmware role).
+# Capture current fw_bundle_versions from tt-smi -s. If the readback fails
+# (cards wedged / ENODEV / driver detached), run one heal cycle and try
+# once more before giving up. TT_FORCE retained as a final escape hatch.
 log "pre-flash: tt-smi -s"
-if tt_smi_snapshot "pre-flash"; then
-  current=$(printf '%s' "$TT_SMI_OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(v.get("firmwares",{}).get("fw_bundle_version","?") for v in d.get("device_info",[])))' || echo "?")
-  log "pre-flash versions: $current"
-  # Skip flash if every card already reports the desired readback and not force.
-  if [[ "${TT_FORCE:-false}" != "true" ]] && [[ -n "$current" ]] && [[ "$current" != "?" ]]; then
-    mismatch=0
-    for v in $current; do
-      [[ "$v" == "$TT_FW_READBACK" ]] || mismatch=1
-    done
-    if [[ $mismatch -eq 0 ]]; then
-      log "all devices already at $TT_FW_READBACK; skipping flash"
-      exit 0
+if ! tt_smi_snapshot "pre-flash"; then
+  log "pre-flash readback failed — attempting one heal cycle"
+  heal_cards
+  if ! tt_smi_snapshot "pre-flash-after-heal"; then
+    if [[ "${TT_FORCE:-false}" == "true" ]]; then
+      log "WARN: tt-smi still failing after heal but TT_FORCE=true; continuing blindly"
+    else
+      log "ERROR: tt-smi still failing after heal — aborting (set spec.force: true to bypass)"
+      exit 1
     fi
   fi
-else
-  if [[ "${TT_FORCE:-false}" == "true" ]]; then
-    log "WARN: pre-flash tt-smi failed but TT_FORCE=true; continuing"
-  else
-    log "ERROR: pre-flash tt-smi failed — aborting (set spec.force: true to bypass)"
-    exit 1
+fi
+
+# At this point TT_SMI_OUT is set if either readback (initial or post-heal)
+# succeeded. If both failed and we're only here because of TT_FORCE,
+# TT_SMI_OUT may be empty — guard the parse.
+current=""
+if [[ -n "${TT_SMI_OUT:-}" ]]; then
+  current=$(printf '%s' "$TT_SMI_OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(v.get("firmwares",{}).get("fw_bundle_version","?") for v in d.get("device_info",[])))' || echo "?")
+  log "pre-flash versions: $current"
+fi
+
+# Skip flash if every card already reports the desired readback and not force.
+if [[ "${TT_FORCE:-false}" != "true" ]] && [[ -n "$current" ]] && [[ "$current" != "?" ]]; then
+  mismatch=0
+  for v in $current; do
+    [[ "$v" == "$TT_FW_READBACK" ]] || mismatch=1
+  done
+  if [[ $mismatch -eq 0 ]]; then
+    log "all devices already at $TT_FW_READBACK; skipping flash"
+    exit 0
   fi
 fi
 
