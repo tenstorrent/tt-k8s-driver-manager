@@ -13,7 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git python3 python3-pip python3-venv \
         pciutils kmod \
-        ipmitool \
+        ipmitool sudo \
     && rm -rf /var/lib/apt/lists/*
 
 # Install tt-flash and tt-smi into a single venv. This is the same approach
