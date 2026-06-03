@@ -139,9 +139,12 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 								{Name: "TT_FLASH_ARGS", Value: flashArgs},
 								{Name: "TT_FORCE", Value: force},
 							},
+							// /dev/tenstorrent comes from privileged's auto-mounted /dev
+							// (containerd bind-mounts host /dev into privileged containers).
+							// An explicit hostPath here overlays a stale per-subpath bind
+							// that doesn't follow host-side destroy/recreate.
 							VolumeMounts: []corev1.VolumeMount{
 								{Name: "work", MountPath: "/work", ReadOnly: true},
-								{Name: "dev-tenstorrent", MountPath: "/dev/tenstorrent"},
 								{Name: "hugepages", MountPath: "/dev/hugepages"},
 								{Name: "sys", MountPath: "/sys"},
 							},
@@ -149,7 +152,6 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 					},
 					Volumes: []corev1.Volume{
 						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-						{Name: "dev-tenstorrent", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/tenstorrent"}}},
 						{Name: "hugepages", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/hugepages"}}},
 						{Name: "sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
 					},
