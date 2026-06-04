@@ -183,6 +183,12 @@ spec:
                     format: int32
                     minimum: 60
                     type: integer
+                  haltOnFailure:
+                    default: true
+                    description: |-
+                      HaltOnFailure halts the rollout as soon as any matched node hits state=Failed,
+                      rather than continuing to flash other nodes. Default true.
+                    type: boolean
                   maxParallel:
                     default: 1
                     description: |-
