@@ -71,6 +71,12 @@ type UpgradePolicy struct {
 	// Drain controls cordon+drain behavior before flashing.
 	// +optional
 	Drain DrainPolicy `json:"drain,omitempty"`
+
+	// HaltOnFailure halts the rollout as soon as any matched node hits state=Failed,
+	// rather than continuing to flash other nodes. Default true.
+	// +kubebuilder:default=true
+	// +optional
+	HaltOnFailure *bool `json:"haltOnFailure,omitempty"`
 }
 
 type DrainPolicy struct {

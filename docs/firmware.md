@@ -45,6 +45,7 @@ What happens:
 | `paused` | `false` | Soft stop. In-flight Jobs not interrupted; new ones don't start. |
 | `force` | `false` | Passes `--force` to tt-flash. Use for downgrades or when re-flashing the same version. |
 | `upgradePolicy.maxParallel` | `1` | Nodes flashing simultaneously across this CR. Crank up only if a bad fw bundle can't brick the fleet faster than you can `paused: true`. |
+| `upgradePolicy.haltOnFailure` | `true` | Halt the rollout the moment any node hits `Failed`. Set `false` to keep flashing the rest of the matched nodes. |
 | `upgradePolicy.flashTimeoutSeconds` | `900` | Per-node Job timeout. PCIe-only typically <120s; Galaxy headroom. |
 | `upgradePolicy.drain.enable` | `true` | Cordon+drain pods that hold `/dev/tenstorrent` before flashing. See [Drain semantics](#drain-semantics). |
 | `upgradePolicy.drain.timeoutSeconds` | `600` | Per-node drain timeout. After this, node moves to `Failed` with the blocking pod list. |

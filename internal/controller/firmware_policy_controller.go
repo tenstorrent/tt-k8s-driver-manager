@@ -99,6 +99,21 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		})
 	}
 
+	// HaltOnFailure (default true): if any matched node has already failed,
+	// don't spawn new work — let the existing status path mark Progressing=Halted.
+	// The summary.Failed > 0 branch in setTopLevelConditions handles the message.
+	haltOnFailure := cr.Spec.UpgradePolicy.HaltOnFailure == nil || *cr.Spec.UpgradePolicy.HaltOnFailure
+	halted := false
+	if haltOnFailure {
+		for _, ns := range nodeStates {
+			if ns.State == firmwarev1alpha1.NodeStateFailed {
+				logger.Info("halting rollout on first node failure", "node", ns.Name)
+				halted = true
+				break
+			}
+		}
+	}
+
 	// Second pass: advance up to (maxParallel - inFlight) nodes through
 	// the next state transition. Advanceable states (per isAdvanceable):
 	// Pending starts work; Cordoning / Draining / Uncordoning continue
@@ -106,7 +121,7 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// waits on the Job; Done / Failed are terminal.
 	capacity := maxParallel - inFlight
 	for i := range nodeStates {
-		if !autoUpgrade || cr.Spec.Paused {
+		if !autoUpgrade || cr.Spec.Paused || halted {
 			break
 		}
 		ns := &nodeStates[i]

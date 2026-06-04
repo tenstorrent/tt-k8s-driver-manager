@@ -589,6 +589,71 @@ func TestReconcile_JobCompleteMeansDone(t *testing.T) {
 	}
 }
 
+// haltOnFailure (default true): first Failed node short-circuits the rollout —
+// no new Jobs spawn for other matched nodes, Progressing goes to Halted.
+func TestReconcile_HaltOnFailure_FirstFailureStopsRollout(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	disable := false
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &disable
+	cr.Spec.UpgradePolicy.MaxParallel = 2
+	// haltOnFailure is unset → defaults to true.
+
+	names := []string{"a", "b", "c", "d"}
+	objs := []runtime.Object{cr}
+	for _, name := range names {
+		objs = append(objs, toClientObject(node(name, nil)))
+	}
+	// Pre-create a Failed Job for "a".
+	failedJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: jobName(cr, "a", cr.Spec.Version), Namespace: "tt-operator-system"},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+			Type: batchv1.JobFailed, Status: corev1.ConditionTrue,
+		}}},
+	}
+	objs = append(objs, failedJob)
+
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(toClientObjects(objs)...).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	// Only the pre-existing Failed Job for "a" should be present; no new ones.
+	var jobs batchv1.JobList
+	if err := r.List(context.Background(), &jobs); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("haltOnFailure should prevent new Jobs; expected 1 (preexisting), got %d", len(jobs.Items))
+	}
+
+	var got firmwarev1alpha1.TenstorrentFirmwarePolicy
+	_ = r.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &got)
+	var progressing *metav1.Condition
+	for i := range got.Status.Conditions {
+		if got.Status.Conditions[i].Type == "Progressing" {
+			progressing = &got.Status.Conditions[i]
+			break
+		}
+	}
+	if progressing == nil {
+		t.Fatalf("Progressing condition missing; conditions=%+v", got.Status.Conditions)
+	}
+	if progressing.Reason != "Halted" {
+		t.Errorf("expected Progressing.reason=Halted, got %q", progressing.Reason)
+	}
+}
+
 // Helper to satisfy the fake builder's client.Object requirement.
 func toClientObject(n corev1.Node) *corev1.Node {
 	out := n
