@@ -10,11 +10,21 @@ ARG TT_SMI_VERSION=3.0.38
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Base toolchain. Kept stable so the large layer caches across builds.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git python3 python3-pip python3-venv \
         pciutils kmod \
-        ipmitool sudo \
     && rm -rf /var/lib/apt/lists/*
+
+# Flasher-specific tools, isolated so future additions here don't bust the
+# base toolchain layer. Also: the GHA buildx cache held a stale combined
+# layer that silently dropped these — a separate RUN gives it a fresh
+# cache key, and the verify step below catches any future regression.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ipmitool sudo \
+    && rm -rf /var/lib/apt/lists/* \
+    && command -v ipmitool >/dev/null \
+    && command -v sudo     >/dev/null
 
 # Install tt-flash and tt-smi into a single venv. This is the same approach
 # tt-ansible uses on hosts (one venv per tool with a /usr/local/bin wrapper)
