@@ -6,7 +6,7 @@ hardware:
 | Layer | Managed via | Where it lives at runtime |
 |---|---|---|
 | `tt-kmd` (kernel module) | `TenstorrentDriverPolicy` CR | loaded in host kernel; `.ko` cached at `/var/cache/tt-kmd/<kver>/<v>/` |
-| `tt-smi` (userspace CLI) | bundled in builder image, tracks CR | host `/opt/tt/` venv + shim at `/usr/local/bin/tt-smi` |
+| `tt-smi` (userspace CLI) | bundled in builder image, tracks CR | self-contained binary at host `/usr/local/bin/tt-smi` |
 | device firmware | `TenstorrentFirmwarePolicy` CR | flashed on-chip via per-node `tt-flash` Job |
 
 One declarative CR per concern (no `ClusterPolicy` god-object). One privileged
@@ -71,9 +71,9 @@ labels:
 ```bash
 $ kubectl get nodes -L driver.tenstorrent.com/kmd-version,tt-smi.driver.tenstorrent.com/version,driver.tenstorrent.com/install-mode,firmware.tenstorrent.com/fw-version
 NAME      STATUS   KMD-VERSION   VERSION   INSTALL-MODE   FW-VERSION
-e01cs01   Ready    2.8.0         3.0.38    container      19.9.0.0
-e01cs02   Ready    2.8.0         3.0.38    container      19.9.0.0
-e01cs03   Ready    2.8.0         3.0.38    container      19.9.0.0
+e01cs01   Ready    2.8.0         5.2.0     container      19.9.0.0
+e01cs02   Ready    2.8.0         5.2.0     container      19.9.0.0
+e01cs03   Ready    2.8.0         5.2.0     container      19.9.0.0
 ```
 
 ```bash
@@ -93,10 +93,10 @@ Once a `TenstorrentDriverPolicy` is reconciled, on each matched node:
   build cache. Survives pod restarts. Not in `/lib/modules` — the operator
   doesn't use depmod, doesn't write to modules.alias, doesn't compete with
   any host package.
-- `/opt/tt/` — Python venv containing `tt-smi` (and its deps). Owned by the
-  operator. Replaced atomically on each upgrade.
-- `/usr/local/bin/tt-smi` — shim that `exec`s `/opt/tt/bin/tt-smi`. Available
-  to anyone who SSHes onto the node.
+- `/usr/local/bin/tt-smi` — self-contained binary (the PyInstaller build
+  from tt-smi releases; no Python needed on the host). Owned by the
+  operator, replaced atomically on each upgrade, available to anyone who
+  SSHes onto the node.
 
 The kernel module itself is loaded into the running kernel (via
 `init_module(2)` from the privileged builder pod); rebooting the host

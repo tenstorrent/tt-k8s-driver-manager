@@ -81,30 +81,23 @@ host_install_detected() {
     return 1
 }
 
-# install_tt_smi copies the bundled venv to the host and drops a shim
-# at /usr/local/bin/tt-smi. Skip in host-managed mode — the host
-# already has its own tt-smi from tt-ansible / apt and we shouldn't
-# overwrite it.
+# install_tt_smi copies the self-contained tt-smi binary to the host.
+# Skip in host-managed mode — the host already has its own tt-smi from
+# tt-ansible / apt and we shouldn't overwrite it.
 install_tt_smi() {
     [ -n "${TT_SMI_VERSION:-}" ] || return 0
-    if [ ! -d /host/opt ] || [ ! -d /host/usr/local/bin ]; then
-        echo "WARN: /host/opt or /host/usr/local/bin not mounted; skipping tt-smi install"
+    if [ ! -d /host/usr/local/bin ]; then
+        echo "WARN: /host/usr/local/bin not mounted; skipping tt-smi install"
         return 0
     fi
-    # Atomic-ish: rsync the venv to a sibling dir, then mv into place.
-    # rsync handles the venv's many small files efficiently; --delete
-    # ensures the destination matches the source on downgrades that
-    # remove files. Then a single mv flips /host/opt/tt to the new
-    # version, and the shim re-points.
-    STAGING=/host/opt/.tt-staging-${TT_SMI_VERSION}.$$
-    rm -rf "$STAGING"
-    rsync -a --delete /opt/tt/ "$STAGING/"
-    rm -rf /host/opt/tt
-    mv "$STAGING" /host/opt/tt
-    # Shim: rename(2) for atomic swap.
-    printf '#!/bin/sh\nexec /opt/tt/bin/tt-smi "$@"\n' > /host/usr/local/bin/.tt-smi.new
+    # rename(2) for atomic swap: concurrent callers see the old binary
+    # or the new one, never a partial file.
+    cp /usr/local/bin/tt-smi /host/usr/local/bin/.tt-smi.new
     chmod 0755 /host/usr/local/bin/.tt-smi.new
     mv /host/usr/local/bin/.tt-smi.new /host/usr/local/bin/tt-smi
+    # Builders before tt-smi 5.x delivered a venv at /opt/tt behind a
+    # shim; the binary above replaces the shim, so drop the orphan.
+    rm -rf /host/opt/tt
     label_node "tt-smi.driver.tenstorrent.com/version" "${TT_SMI_VERSION}"
     echo "tt-smi ${TT_SMI_VERSION} installed at host:/usr/local/bin/tt-smi"
 }

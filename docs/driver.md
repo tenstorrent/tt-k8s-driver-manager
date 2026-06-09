@@ -32,7 +32,7 @@ What happens:
      clone tt-kmd at the requested tag, `make modules` against host
      kernel headers, `insmod`. Mismatch with `refcnt>0` (workload holding
      the device) → fail loudly with the holder PIDs.
-4. Copies the bundled `tt-smi` venv to `/host/opt/tt`, drops a shim at
+4. Copies the bundled self-contained `tt-smi` binary to
    `/host/usr/local/bin/tt-smi`.
 5. Stamps `kmd-version`, `tt-smi.driver.tenstorrent.com/version`, and
    `install-mode` labels on the node it's running on.
@@ -162,12 +162,8 @@ Per node, after a successful reconcile:
 └── 6.8.0-111-generic/
     ├── 2.7.0/tenstorrent.ko   ← cached build from a previous CR
     └── 2.8.0/tenstorrent.ko   ← currently loaded
-/opt/tt/
-├── bin/python3
-├── bin/tt-smi                  ← the real binary
-├── lib/python3.10/site-packages/tt_smi/...
-└── (rest of the venv)
-/usr/local/bin/tt-smi           ← shim: `exec /opt/tt/bin/tt-smi "$@"`
+/usr/local/bin/tt-smi           ← self-contained binary (PyInstaller build,
+                                  no host Python needed)
 ```
 
 The kernel module itself is in-kernel — `/sys/module/tenstorrent/` shows

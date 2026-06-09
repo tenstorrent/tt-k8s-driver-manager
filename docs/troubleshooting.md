@@ -202,17 +202,19 @@ kubectl label node <name> driver.tenstorrent.com/skip=true
 
 ```
 $ tt-smi -s
-/usr/local/bin/tt-smi: line 1: /opt/tt/bin/python3: not found
+tt-smi: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.38' not found
 ```
 
-The bundled `/opt/tt` venv contains a `python3` binary compiled for the
-builder image's base OS. If that doesn't match the host OS (e.g.
-container is ubuntu:24.04, host is ubuntu:22.04 with python3.10 only),
-the venv's python can't load shared libs and the shim fails.
+`/usr/local/bin/tt-smi` is the self-contained binary from tt-smi's
+GitHub releases, which ships one flavor per Ubuntu release
+(`tt-smi-<v>-ubuntu-22.04`, `-ubuntu-24.04`, ...). The builder image
+bakes in the flavor matching its `ARG UBUNTU_VERSION`; if that's newer
+than the host OS, the binary needs glibc symbols the host doesn't have.
 
-Fix: rebuild the builder image with a base matching the host OS. As of
-today the image uses `ubuntu:22.04`; if your hosts are 24.04, bump the
-`ARG UBUNTU_VERSION` in `images/driver-build/Dockerfile` and push.
+Fix: set `ARG UBUNTU_VERSION` in `images/driver-build/Dockerfile` to
+the hosts' Ubuntu release and push. Mixed-OS fleets need one builder
+image (and so one `TenstorrentDriverPolicy` with a matching
+`nodeSelector`) per Ubuntu release.
 
 ## CR keeps re-flashing despite node being at the right version
 
