@@ -34,10 +34,6 @@ type TenstorrentFirmwarePolicySpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
-	// Force passes --force to tt-flash, bypassing the device-side version check.
-	// +optional
-	Force bool `json:"force,omitempty"`
-
 	// UpgradePolicy controls how aggressively the operator drives upgrades.
 	// +optional
 	UpgradePolicy UpgradePolicy `json:"upgradePolicy,omitempty"`
@@ -110,6 +106,23 @@ type FlasherOverride struct {
 	// Set to "Always" while iterating on the entrypoint.
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+
+	// ForceWrite, when true, instructs the flasher to write firmware even
+	// when the chip's current readback already matches the target version.
+	// Adds --force to tt-flash and bypasses the script's "already at target,
+	// exit 0" short-circuit. Use for re-flashing the same version, downgrades,
+	// or suspected silent ROM corruption.
+	// +optional
+	ForceWrite bool `json:"forceWrite,omitempty"`
+
+	// ContinueOnReadbackFailure, when true, instructs the flasher to proceed
+	// with the flash even when pre-flash tt-smi readback fails (e.g. chip
+	// wedged, driver detached). Use for recovering inaccessible chips when
+	// the underlying ROM is still writable through tt-flash's lower-level
+	// path. Independent of ForceWrite — a chip that recovers and reports
+	// the target version will still skip the flash unless ForceWrite is set.
+	// +optional
+	ContinueOnReadbackFailure bool `json:"continueOnReadbackFailure,omitempty"`
 }
 
 // TenstorrentFirmwarePolicyStatus is the observed state.

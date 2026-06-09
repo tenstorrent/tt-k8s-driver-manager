@@ -27,7 +27,7 @@ What happens:
    - Downloads `fw_pack-<version>.fwbundle` from
      `github.com/tenstorrent/tt-system-firmware` releases.
    - Runs `tt-flash --no-color flash <bundle>` (with `--force` if
-     `spec.force=true`).
+     `spec.flasher.forceWrite=true`).
    - Asserts post-flash readback equals `spec.readbackVersion` (default
      `<version>.0` to match tt-ansible's convention).
 3. Job's exit code is the controller's signal — no separate readback
@@ -43,7 +43,6 @@ What happens:
 | `bundleURL` | github tt-system-firmware release | Pin to a specific URL (mirror, internal repo, signed copy). |
 | `nodeSelector` | required | Same shape as the driver CR. |
 | `paused` | `false` | Soft stop. In-flight Jobs not interrupted; new ones don't start. |
-| `force` | `false` | Passes `--force` to tt-flash. Use for downgrades or when re-flashing the same version. |
 | `upgradePolicy.maxParallel` | `1` | Nodes flashing simultaneously across this CR. Crank up only if a bad fw bundle can't brick the fleet faster than you can `paused: true`. |
 | `upgradePolicy.haltOnFailure` | `true` | Halt the rollout the moment any node hits `Failed`. Set `false` to keep flashing the rest of the matched nodes. |
 | `upgradePolicy.flashTimeoutSeconds` | `900` | Per-node Job timeout. PCIe-only typically <120s; Galaxy headroom. |
@@ -52,6 +51,8 @@ What happens:
 | `upgradePolicy.drain.force` | `false` | Delete pods that have no controller (bare Pods) instead of evicting. |
 | `flasher.image` | chart's `flasher.image` | Per-CR override of the flasher image. |
 | `flasher.imagePullPolicy` | `IfNotPresent` | Override for the above. |
+| `flasher.forceWrite` | `false` | Bypass the "current readback already matches target" short-circuit and pass `--force` to tt-flash. Use for re-flashing the same version, downgrades, or suspected silent ROM corruption. |
+| `flasher.continueOnReadbackFailure` | `false` | Continue with the flash even if `tt-smi` pre-flash readback fails (chip wedged / driver detached). Independent of `forceWrite`: a chip that subsequently recovers and reports the target version will still skip the flash unless `forceWrite` is also set. |
 
 ## CR examples
 

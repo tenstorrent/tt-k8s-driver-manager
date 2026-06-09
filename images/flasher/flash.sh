@@ -2,14 +2,19 @@
 # Flasher entrypoint for tt-operator.
 #
 # Contract — set by the operator's Job template (see internal/controller/job.go):
-#   TT_FW_BUNDLE_PATH   Local path the initContainer wrote the bundle to.
-#   TT_FW_VERSION       Version we asked tt-flash to write (e.g. 19.8.0).
-#   TT_FW_READBACK      Version tt-smi should report after flash (e.g. 19.8.0.0).
-#   TT_FLASH_ARGS       Extra args to tt-flash (e.g. "--force").
-#   TT_FORCE            "true" if --force is in flight; lets us continue past a
-#                       failed pre-flash readback (matches tt-ansible's rescue).
-#   MOCK                "true" → no hardware; simulate a flash. For kind dev.
-#   MOCK_FAIL           "true" → simulated failure path (for testing UpgradeFailed).
+#   TT_FW_BUNDLE_PATH                  Local path the initContainer wrote the bundle to.
+#   TT_FW_VERSION                      Version we asked tt-flash to write (e.g. 19.8.0).
+#   TT_FW_READBACK                     Version tt-smi should report after flash (e.g. 19.8.0.0).
+#   TT_FLASH_ARGS                      Extra args to tt-flash (e.g. "--force"). Carries the
+#                                      tt-flash --force flag when ForceWrite is set on the CR.
+#   TT_FORCE_WRITE                     "true" → bypass the "current readback already matches
+#                                      target, exit 0" short-circuit and re-flash anyway.
+#                                      Derived from spec.flasher.forceWrite.
+#   TT_CONTINUE_ON_READBACK_FAILURE    "true" → proceed even if tt-smi pre-flash readback fails
+#                                      after heal (chip wedged / driver detached). Derived from
+#                                      spec.flasher.continueOnReadbackFailure.
+#   MOCK                               "true" → no hardware; simulate a flash. For kind dev.
+#   MOCK_FAIL                          "true" → simulated failure path (for testing UpgradeFailed).
 #
 # Exit codes:
 #   0   Flash succeeded (or skipped because version already matched and not force).
@@ -106,32 +111,36 @@ fi
 # --- 1. Pre-flash readback ------------------------------------------------
 # Capture current fw_bundle_versions from tt-smi -s. If the readback fails
 # (cards wedged / ENODEV / driver detached), run one heal cycle and try
-# once more before giving up. TT_FORCE retained as a final escape hatch.
+# once more before giving up. TT_CONTINUE_ON_READBACK_FAILURE is the escape
+# hatch for chips that still don't respond after heal (e.g. gpu wedged at a
+# level USER_RESET can't recover).
 log "pre-flash: tt-smi -s"
 if ! tt_smi_snapshot "pre-flash"; then
   log "pre-flash readback failed — attempting one heal cycle"
   heal_cards
   if ! tt_smi_snapshot "pre-flash-after-heal"; then
-    if [[ "${TT_FORCE:-false}" == "true" ]]; then
-      log "WARN: tt-smi still failing after heal but TT_FORCE=true; continuing blindly"
+    if [[ "${TT_CONTINUE_ON_READBACK_FAILURE:-false}" == "true" ]]; then
+      log "WARN: tt-smi still failing after heal but TT_CONTINUE_ON_READBACK_FAILURE=true; continuing blindly"
     else
-      log "ERROR: tt-smi still failing after heal — aborting (set spec.force: true to bypass)"
+      log "ERROR: tt-smi still failing after heal — aborting (set spec.flasher.continueOnReadbackFailure: true to bypass)"
       exit 1
     fi
   fi
 fi
 
 # At this point TT_SMI_OUT is set if either readback (initial or post-heal)
-# succeeded. If both failed and we're only here because of TT_FORCE,
-# TT_SMI_OUT may be empty — guard the parse.
+# succeeded. If both failed and we're only here because of
+# TT_CONTINUE_ON_READBACK_FAILURE, TT_SMI_OUT may be empty — guard the parse.
 current=""
 if [[ -n "${TT_SMI_OUT:-}" ]]; then
   current=$(printf '%s' "$TT_SMI_OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(v.get("firmwares",{}).get("fw_bundle_version","?") for v in d.get("device_info",[])))' || echo "?")
   log "pre-flash versions: $current"
 fi
 
-# Skip flash if every card already reports the desired readback and not force.
-if [[ "${TT_FORCE:-false}" != "true" ]] && [[ -n "$current" ]] && [[ "$current" != "?" ]]; then
+# Skip flash if every card already reports the desired readback. ForceWrite
+# bypasses this short-circuit (re-flash same version, downgrade, suspected
+# silent corruption).
+if [[ "${TT_FORCE_WRITE:-false}" != "true" ]] && [[ -n "$current" ]] && [[ "$current" != "?" ]]; then
   mismatch=0
   for v in $current; do
     [[ "$v" == "$TT_FW_READBACK" ]] || mismatch=1

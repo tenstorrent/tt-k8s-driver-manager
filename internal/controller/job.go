@@ -34,6 +34,13 @@ func sanitizeVersion(v string) string {
 	return strings.ReplaceAll(v, ".", "-")
 }
 
+func boolEnv(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
 // buildFlashJob templates the per-node flash Job. The bundle is fetched by an
 // initContainer into a shared emptyDir; the flasher container runs tt-flash
 // then asserts readback via tt-smi.
@@ -53,6 +60,8 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 
 	image := defaultImage
 	pullPolicy := corev1.PullIfNotPresent
+	forceWrite := false
+	continueOnReadbackFailure := false
 	if cr.Spec.Flasher != nil {
 		if cr.Spec.Flasher.Image != "" {
 			image = cr.Spec.Flasher.Image
@@ -60,13 +69,16 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 		if cr.Spec.Flasher.ImagePullPolicy != "" {
 			pullPolicy = cr.Spec.Flasher.ImagePullPolicy
 		}
+		forceWrite = cr.Spec.Flasher.ForceWrite
+		continueOnReadbackFailure = cr.Spec.Flasher.ContinueOnReadbackFailure
 	}
 
+	// ForceWrite bypasses both the script-level "already at target" skip and
+	// tt-flash's own version-match check. ContinueOnReadbackFailure independently
+	// lets the script proceed when tt-smi can't read the chip.
 	flashArgs := ""
-	force := "false"
-	if cr.Spec.Force {
+	if forceWrite {
 		flashArgs = "--force"
-		force = "true"
 	}
 
 	timeout := int64(cr.Spec.UpgradePolicy.FlashTimeoutSeconds)
@@ -137,7 +149,8 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 								{Name: "TT_FW_VERSION", Value: version},
 								{Name: "TT_FW_READBACK", Value: readback},
 								{Name: "TT_FLASH_ARGS", Value: flashArgs},
-								{Name: "TT_FORCE", Value: force},
+								{Name: "TT_FORCE_WRITE", Value: boolEnv(forceWrite)},
+								{Name: "TT_CONTINUE_ON_READBACK_FAILURE", Value: boolEnv(continueOnReadbackFailure)},
 							},
 							// /dev/tenstorrent comes from privileged's auto-mounted /dev
 							// (containerd bind-mounts host /dev into privileged containers).
