@@ -149,7 +149,7 @@ What it does NOT remove (intentional):
 - The DaemonSets the controller created (they were owned by the CRs,
   not by helm). Delete the CRs first if you want full cleanup:
   `kubectl delete ttdp --all`.
-- Any state on the hosts: `/var/cache/tt-kmd/*`, `/opt/tt/`,
+- Any state on the hosts: `/var/cache/tt-kmd/*`,
   `/usr/local/bin/tt-smi`. The kernel module stays loaded too. Clean
   these manually if you're tearing down a node — see
   [docs/troubleshooting.md → fully clean a host](troubleshooting.md#fully-clean-a-host).

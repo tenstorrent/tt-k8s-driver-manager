@@ -406,10 +406,11 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							// (e.g. tt-ansible's tt_kmd role) and stand
 							// down — see install-mode label.
 							{Name: "var-lib-dkms", MountPath: "/var/lib/dkms", ReadOnly: true},
-							// Host /opt and /usr/local/bin for tt-smi
-							// delivery: entrypoint copies /opt/tt venv into
-							// /host/opt/tt and drops the shim at
-							// /host/usr/local/bin/tt-smi.
+							// Host /usr/local/bin for tt-smi delivery:
+							// entrypoint copies the self-contained binary to
+							// /host/usr/local/bin/tt-smi. /host/opt stays
+							// mounted so it can remove the venv that pre-5.x
+							// builders installed at /opt/tt.
 							{Name: "host-opt", MountPath: "/host/opt"},
 							{Name: "host-usr-local-bin", MountPath: "/host/usr/local/bin"},
 						},

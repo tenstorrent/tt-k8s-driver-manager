@@ -60,15 +60,11 @@ Per-node sequence:
 
 1. Controller's DS template gets the new image tag; template hash
    changes; rolling update.
-2. New pod's entrypoint rsyncs `/opt/tt` → `/host/opt/tt` (replaces in
-   place), writes a new shim at `/host/usr/local/bin/tt-smi`.
+2. New pod's entrypoint writes the binary to a sibling path and
+   `rename(2)`s it over `/host/usr/local/bin/tt-smi` — concurrent
+   `tt-smi -s` calls on the host see either the old binary or the new
+   one, never a partial file.
 3. Patches `tt-smi.driver.tenstorrent.com/version` on the node.
-
-Wall-clock per node: ~5–15s — the rsync is fast.
-
-`mv(2)` is atomic, so concurrent `tt-smi -s` calls on the host see
-either the old fully-resolved binary or the new one, never a partial
-file.
 
 ## Firmware
 

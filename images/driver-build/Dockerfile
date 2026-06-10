@@ -1,10 +1,12 @@
-# Base image must match the host OS so the bundled tt-smi venv copies
-# cleanly. aus2-dev2 hosts run Ubuntu 22.04 (jammy); python3.10's venv
-# built here is the same one the host can execute. Bumping the host OS
-# requires bumping this base too.
+# UBUNTU_VERSION selects both the base image and the tt-smi release-binary
+# flavor (tt-smi-<v>-ubuntu-<UBUNTU_VERSION>). The binary is a PyInstaller
+# build linked against the glibc of that Ubuntu release, so it must match
+# the host OS — aus2-dev2 hosts run Ubuntu 22.04 (jammy). Bumping the host
+# OS requires bumping this too.
 ARG UBUNTU_VERSION=22.04
-ARG TT_SMI_VERSION=3.0.38
+ARG TT_SMI_VERSION=5.2.0
 FROM ubuntu:${UBUNTU_VERSION}
+ARG UBUNTU_VERSION
 ARG TT_SMI_VERSION
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-k8s-driver-manager"
 LABEL org.opencontainers.image.description="tt-k8s-driver-manager builder pod — clones + builds tt-kmd, insmods, copies tt-smi to host."
@@ -20,26 +22,23 @@ LABEL com.tenstorrent.tt-smi-version="${TT_SMI_VERSION}"
 # libelf-dev:      objtool (shipped in the host's linux-headers tree as a
 #                  prebuilt binary) dynamically links libelf.so.1.
 # libssl-dev:      kernel module signing pulls in libcrypto.
-# python3-venv:    needed to build the tt-smi venv that we ship to the host.
 # kmod:            insmod / rmmod against the host kernel
 # git:             clone tt-kmd at the requested tag
 # psmisc:          fuser, for surfacing holders of /dev/tenstorrent
-# curl:            entrypoint patches node labels via the in-cluster API.
+# curl:            fetches the tt-smi release binary below; entrypoint
+#                  patches node labels via the in-cluster API.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        build-essential gcc-12 libelf-dev libssl-dev python3-venv \
-        kmod git ca-certificates psmisc curl rsync \
+        build-essential gcc-12 libelf-dev libssl-dev \
+        kmod git ca-certificates psmisc curl \
  && rm -rf /var/lib/apt/lists/*
 
-# tt-smi pinned via ARG TT_SMI_VERSION. We build a venv with --copies so
-# /opt/tt/bin/python3 is a real binary (not a symlink into the container's
-# /usr/bin/python3), making the whole tree portable to the host. The
-# entrypoint copies /opt/tt → host /opt/tt and drops a shim at host
-# /usr/local/bin/tt-smi.
-RUN python3 -m venv --copies /opt/tt \
- && /opt/tt/bin/pip install --no-cache-dir --upgrade pip \
- && /opt/tt/bin/pip install --no-cache-dir \
-        "git+https://github.com/tenstorrent/tt-smi.git@v${TT_SMI_VERSION}"
+# tt-smi ships a self-contained single-file binary per Ubuntu release
+# (PyInstaller, since v5.1.0) — no Python needed on the host. The
+# entrypoint copies it to host /usr/local/bin/tt-smi.
+RUN curl -fsSL -o /usr/local/bin/tt-smi \
+        "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" \
+ && chmod 0755 /usr/local/bin/tt-smi
 ENV TT_SMI_VERSION=${TT_SMI_VERSION}
 
 COPY entrypoint.sh /entrypoint.sh
