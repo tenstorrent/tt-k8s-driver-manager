@@ -160,6 +160,12 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 								{Name: "work", MountPath: "/work", ReadOnly: true},
 								{Name: "hugepages", MountPath: "/dev/hugepages"},
 								{Name: "sys", MountPath: "/sys"},
+								// Host-installed standalone tt-smi (PyInstaller binary
+								// dropped by the driver-build DS). Lets the flasher
+								// reuse the host's tt-smi instead of bundling a venv
+								// copy whose native deps (libatomic) the flasher
+								// image would otherwise have to track.
+								{Name: "host-tt-smi", MountPath: "/usr/local/bin/tt-smi", ReadOnly: true},
 							},
 						},
 					},
@@ -167,6 +173,7 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 						{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 						{Name: "hugepages", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev/hugepages"}}},
 						{Name: "sys", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/sys"}}},
+						{Name: "host-tt-smi", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin/tt-smi", Type: hostPathFile()}}},
 					},
 				},
 			},
@@ -188,6 +195,15 @@ func jobFinished(job *batchv1.Job) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+// hostPathFile returns a pointer to corev1.HostPathFile so a HostPathVolumeSource
+// can require that the mounted host path be a regular file (kubelet errors out
+// otherwise — handy here because /usr/local/bin/tt-smi must be the standalone
+// binary, not a missing path or a directory).
+func hostPathFile() *corev1.HostPathType {
+	t := corev1.HostPathFile
+	return &t
 }
 
 // setOwnerRef attaches the CR as owner so Job GC follows CR deletion.
