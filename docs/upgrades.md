@@ -46,15 +46,17 @@ version. To unblock:
 
 tt-smi version is baked into the builder image at image-build time
 (`ARG TT_SMI_VERSION`). To upgrade across the fleet, bump the chart's
-`driver.image` to a builder image tag built with the new tt-smi
+`driver.image.tag` to a builder image tag built with the new tt-smi
 version.
 
 ```bash
 helm -n tt-k8s-driver-manager-system upgrade tt-k8s-driver-manager \
   oci://ghcr.io/tenstorrent/helm-charts/tt-k8s-driver-manager \
   --reuse-values \
-  --set driver.image=ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:sha-newer
+  --set driver.image.tag=sha-newer
 ```
+
+(Or set `driver.image.repository` too if you're pulling from a mirror.)
 
 Per-node sequence:
 

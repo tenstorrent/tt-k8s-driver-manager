@@ -24,8 +24,8 @@ spec:
       {{- end }}
       containers:
         - name: manager
-          image: {{ .Values.controller.image }}
-          imagePullPolicy: {{ .Values.controller.imagePullPolicy }}
+          image: "{{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.controller.leaderElection }}
             - --health-probe-bind-address=:8081
@@ -34,9 +34,9 @@ spec:
             - name: OPERATOR_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             - name: DRIVER_IMAGE
-              value: {{ .Values.driver.image | quote }}
+              value: "{{ .Values.driver.image.repository }}:{{ .Values.driver.image.tag | default .Chart.AppVersion }}"
             - name: FLASHER_IMAGE
-              value: {{ .Values.flasher.image | quote }}
+              value: "{{ .Values.flasher.image.repository }}:{{ .Values.flasher.image.tag | default .Chart.AppVersion }}"
             - name: REQUIRE_TT_PCI_LABEL
               value: {{ .Values.controller.requireTenstorrentLabel | quote }}
             - name: INSTALLER_SERVICE_ACCOUNT

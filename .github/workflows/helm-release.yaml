@@ -3,6 +3,17 @@ name: Release Helm Chart
 # Publishes the tt-k8s-driver-manager chart to
 # oci://ghcr.io/tenstorrent/helm-charts so tt-operator can pick it up as
 # a subchart dependency.
+#
+# Versioning model (ported from tenstorrent/tt-fabric-manager):
+#
+# - Chart.yaml carries `version: 0.0.0` + `appVersion: latest` as
+#   permanent sentinels — never bumped manually.
+# - .github/actions/version computes the real version per run from the
+#   latest `v*.*.*` git tag + run_number + sha. Same action that
+#   drives the images workflow, so chart + images get the same string
+#   on the same commit.
+# - At publish time we sed-replace the sentinels in Chart.yaml before
+#   packaging.
 
 on:
   pull_request:
@@ -24,6 +35,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
       - name: Lint
+        # The sentinels (version 0.0.0, appVersion latest) lint clean —
+        # 0.0.0 is valid semver, "latest" is an allowed appVersion string.
+        # No sed needed for lint.
         run: helm lint charts/tt-k8s-driver-manager
 
   publish:
@@ -34,11 +48,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
 
-      - name: Extract chart version
-        id: chart
+      - name: Compute version
+        id: version
+        uses: ./.github/actions/version
+
+      - name: Stamp computed version into Chart.yaml
+        # Replace both sentinels. `latest` is replaced with the SAME
+        # computed version so appVersion = version for every release;
+        # that's what makes the chart's `image.tag | default .Chart.AppVersion`
+        # default render to the same tag the images workflow just pushed.
         run: |
-          VERSION=$(grep '^version:' charts/tt-k8s-driver-manager/Chart.yaml | awk '{print $2}')
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          sed -i "s/^version: 0\.0\.0$/version: ${{ steps.version.outputs.version }}/" \
+            charts/tt-k8s-driver-manager/Chart.yaml
+          sed -i "s/^appVersion: latest$/appVersion: ${{ steps.version.outputs.version }}/" \
+            charts/tt-k8s-driver-manager/Chart.yaml
+          echo "Stamped:"
+          grep -E "^version:|^appVersion:" charts/tt-k8s-driver-manager/Chart.yaml
 
       - name: Log in to GHCR
         run: |
@@ -49,5 +74,5 @@ jobs:
         run: |
           helm package charts/tt-k8s-driver-manager --destination /tmp/helm-packages
           helm push \
-            /tmp/helm-packages/tt-k8s-driver-manager-${{ steps.chart.outputs.version }}.tgz \
+            /tmp/helm-packages/tt-k8s-driver-manager-${{ steps.version.outputs.version }}.tgz \
             oci://ghcr.io/${{ github.repository_owner }}/helm-charts
