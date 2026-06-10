@@ -77,17 +77,10 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	nodeStates := make([]firmwarev1alpha1.NodeStatus, 0, len(owned)+len(conflicts))
 
 	// First pass: observe current state without mutating cluster state.
-	// Count anything mid-flight (Cordoning / Draining / Flashing /
-	// Uncordoning) against maxParallel — all of those tie up workload
-	// availability on a node.
 	now := metav1.Now()
-	inFlight := 0
 	for _, node := range owned {
 		ns := r.observeNode(ctx, cr, node)
 		ns.LastTransitionTime = now
-		if isInFlight(ns.State) {
-			inFlight++
-		}
 		nodeStates = append(nodeStates, ns)
 	}
 	for _, c := range conflicts {
@@ -114,6 +107,17 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
+	// Count in-flight Jobs by listing the Jobs we own (label JobLabelCR=cr.Name)
+	// and filtering out finished ones. Using the live Job list — rather than
+	// the per-node observed state we just derived — keeps maxParallel honest
+	// even if a previous reconcile created a Job but failed before recording
+	// it in node state, or if observed state is otherwise out of sync. This
+	// is the source of truth for "how many slots are currently consumed."
+	inFlight, err := r.countInFlightJobs(ctx, cr)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("count in-flight jobs: %w", err)
+	}
+
 	// Second pass: advance up to (maxParallel - inFlight) nodes through
 	// the next state transition. Advanceable states (per isAdvanceable):
 	// Pending starts work; Cordoning / Draining / Uncordoning continue
@@ -136,20 +140,25 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		// Only Pending consumes a fresh slot; in-flight states proceed
 		// regardless because they already count.
 		startingFresh := ns.State == firmwarev1alpha1.NodeStatePending
-		if startingFresh && capacity == 0 {
+		if startingFresh && capacity <= 0 {
 			continue
 		}
 		node := findNode(owned, ns.Name)
 		if node == nil {
 			continue
 		}
-		advanced, err := r.advanceNode(ctx, cr, node, ns)
-		if err != nil {
-			logger.Error(err, "advance node", "node", ns.Name)
-			continue
-		}
-		if advanced && startingFresh {
+		advanced, advErr := r.advanceNode(ctx, cr, node, ns)
+		// Decrement capacity if the slot is now spent — either advanceNode
+		// reported it (advanced=true) or spawnFlashJob marked ns.State =
+		// Flashing after a successful Create even though a downstream patch
+		// errored. Crucially, run this BEFORE the err-continue so a failed
+		// patch can't leak the slot back into the pool.
+		if startingFresh && (advanced || ns.State == firmwarev1alpha1.NodeStateFlashing) {
 			capacity--
+		}
+		if advErr != nil {
+			logger.Error(advErr, "advance node", "node", ns.Name)
+			continue
 		}
 	}
 
@@ -444,6 +453,29 @@ func (r *FirmwarePolicyReconciler) advanceNode(ctx context.Context, cr *firmware
 	return false, nil
 }
 
+// countInFlightJobs returns the number of unfinished Jobs owned by this CR,
+// identified by the JobLabelCR label. "Unfinished" means jobFinished returns
+// (false, _) — i.e. no terminal Complete/Failed condition is set yet. This is
+// the source of truth for "how many parallelism slots are currently consumed"
+// and is robust to observed-state drift across reconciles.
+func (r *FirmwarePolicyReconciler) countInFlightJobs(ctx context.Context, cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) (int, error) {
+	var jobs batchv1.JobList
+	if err := r.List(ctx, &jobs,
+		client.InNamespace(operatorNamespace()),
+		client.MatchingLabels{JobLabelCR: cr.Name},
+	); err != nil {
+		return 0, err
+	}
+	n := 0
+	for i := range jobs.Items {
+		completed, _ := jobFinished(&jobs.Items[i])
+		if !completed {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // spawnFlashJob creates the per-node flash Job and writes the
 // denormalized labels/annotations the operator-guide tells humans to
 // grep. Idempotent on AlreadyExists.
@@ -461,6 +493,15 @@ func (r *FirmwarePolicyReconciler) spawnFlashJob(ctx context.Context, cr *firmwa
 	log.FromContext(ctx).Info("spawned flash Job",
 		"cr", cr.Name, "node", node.Name, "version", cr.Spec.Version, "job", job.Name)
 
+	// The slot is consumed the instant the apiserver accepts the Create.
+	// Reflect that in ns immediately so the reconcile loop's capacity
+	// accounting sees this node as Flashing even if a subsequent
+	// annotate/label patch fails — otherwise the loop would happily keep
+	// the slot "open" and spawn another Job for a different Pending node
+	// despite a Job already existing here.
+	ns.State = firmwarev1alpha1.NodeStateFlashing
+	ns.LastFlashJob = job.Name
+
 	if err := r.annotateNode(ctx, node, map[string]string{
 		AnnoDesiredVersion: cr.Spec.Version,
 		AnnoLastFlashJob:   job.Name,
@@ -472,9 +513,6 @@ func (r *FirmwarePolicyReconciler) spawnFlashJob(ctx context.Context, cr *firmwa
 	}); err != nil {
 		return false, fmt.Errorf("label node: %w", err)
 	}
-
-	ns.State = firmwarev1alpha1.NodeStateFlashing
-	ns.LastFlashJob = job.Name
 	return true, nil
 }
 
