@@ -10,9 +10,12 @@ description: >
     - Triggered by a `v*.*.*` git tag → version is the tag with `v`
       stripped (e.g. `v0.2.0` → `0.2.0`). The clean-release path.
     - Any other push, latest `v*.*.*` tag in the repo is `v0.X.Y` →
-      `0.X.(Y+1)-<run_number>.sha-<short>`. Sortable per semver
-      pre-release rules; every push yields a unique immutable tag.
-    - No `v*.*.*` tags exist in the repo yet → `0.0.0-<run>.sha-<short>`.
+      `0.X.(Y+1)-<distance>.sha-<short>`, where <distance> is the
+      number of commits between the latest v*.*.* tag and HEAD.
+      Sortable per semver pre-release rules; deterministic per commit
+      (so the chart + images workflows produce identical version
+      strings for the same sha).
+    - No `v*.*.*` tags exist in the repo yet → `0.0.0-0.sha-<short>`.
 
 outputs:
   version:
@@ -42,7 +45,7 @@ runs:
           || true)
 
         if [ -z "$LATEST_TAG" ]; then
-          VERSION="0.0.0-${{ github.run_number }}.sha-${SHORT_SHA}"
+          VERSION="0.0.0-0.sha-${SHORT_SHA}"
           echo "No v*.*.* tags found; using fallback ${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           exit 0
@@ -55,9 +58,15 @@ runs:
           echo "Triggered by tag ${LATEST_TAG}; using clean ${CURRENT_VERSION}"
           echo "version=${CURRENT_VERSION}" >> "$GITHUB_OUTPUT"
         else
+          # Commit count from latest tag → HEAD. Same for every
+          # workflow that runs against this sha, unlike github.run_number
+          # which is per-workflow (so chart workflow N + images workflow
+          # M for the same commit previously produced version strings
+          # that referenced each other but didn't agree on the counter).
+          DISTANCE=$(gh api "/repos/${{ github.repository }}/compare/${LATEST_TAG}...${{ github.sha }}" --jq '.total_commits' 2>/dev/null || echo 0)
           IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
           patch=$((patch + 1))
-          VERSION="${major}.${minor}.${patch}-${{ github.run_number }}.sha-${SHORT_SHA}"
-          echo "Latest tag ${LATEST_TAG}; bumping to pre-release ${VERSION}"
+          VERSION="${major}.${minor}.${patch}-${DISTANCE}.sha-${SHORT_SHA}"
+          echo "Latest tag ${LATEST_TAG}, ${DISTANCE} commit(s) ahead; bumping to pre-release ${VERSION}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
         fi
