@@ -367,10 +367,16 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: podLabels},
 				Spec: corev1.PodSpec{
-					// No hostPID/hostNetwork — the builder doesn't nsenter.
-					// It reads kernel state via its own sysfs mount (kernel-
-					// shared) and invokes init_module(2) / delete_module(2)
-					// directly with CAP_SYS_MODULE (privileged=true).
+					// No hostNetwork — the builder reads kernel state via its
+					// own sysfs mount (kernel-shared) and invokes init_module(2)
+					// / delete_module(2) directly with CAP_SYS_MODULE
+					// (privileged=true). hostPID is set ONLY when forceUnload
+					// is true: fuser walks /proc/<pid>/fd looking for device
+					// holders and only sees the host's processes when the pod
+					// shares the host's PID namespace. Without hostPID the
+					// builder's /proc is just its own one process and fuser-k
+					// is a no-op.
+					HostPID:            cr.Spec.ForceUnload,
 					ServiceAccountName: envOrDefault("INSTALLER_SERVICE_ACCOUNT", "tt-k8s-driver-manager-installer"),
 					Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					Affinity: &corev1.Affinity{
