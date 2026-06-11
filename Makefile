@@ -20,6 +20,11 @@ generate: controller-gen
 	$(CONTROLLER_GEN) object paths=./api/...
 	$(CONTROLLER_GEN) crd  paths=./api/...        output:crd:dir=./config/crd/bases
 	$(CONTROLLER_GEN) rbac:roleName=tt-k8s-driver-manager paths=./internal/... output:rbac:dir=./config/rbac
+	# Mirror the generated CRDs into the chart's crds/ dir. Helm packages
+	# this directory verbatim — without the copy, the published chart
+	# ships a stale CRD that silently drops new spec fields. Drift here
+	# is easy to miss, so the sync is part of `make generate`.
+	cp config/crd/bases/*.yaml charts/tt-k8s-driver-manager/crds/
 
 ##@ Build / test
 
