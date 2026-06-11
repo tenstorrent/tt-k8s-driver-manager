@@ -60,15 +60,6 @@ spec:
             description: TenstorrentDriverPolicySpec declares the desired tt-kmd version
               for a set of nodes.
             properties:
-              forceUnload:
-                description: |-
-                  ForceUnload SIGKILLs every process holding /dev/tenstorrent (via
-                  `fuser -k`) before rmmod when the loaded module's refcount is
-                  non-zero. Default (false) is the safe path: the builder pod errors
-                  and waits for the next reconcile, letting the operator drain
-                  workloads manually. Set true on clusters where you'd rather lose
-                  in-flight workloads than block a driver upgrade.
-                type: boolean
               installer:
                 description: |-
                   Installer overrides the installer image / pull policy. Useful for dev
@@ -135,6 +126,53 @@ spec:
                   Paused stops the controller from advancing state. The DaemonSet stays
                   running with its current spec; in-flight installs are not interrupted.
                 type: boolean
+              upgradePolicy:
+                description: |-
+                  UpgradePolicy controls how the controller drives kmd version
+                  transitions: what to do when a node has device-using workloads
+                  blocking rmmod, drain config, timeouts. Modeled on
+                  TenstorrentFirmwarePolicy.UpgradePolicy (same shape, ttdp-relevant
+                  subset).
+                properties:
+                  drain:
+                    description: |-
+                      Drain controls cordon + device-pod eviction before the builder pod
+                      attempts rmmod. When disabled the controller falls back to the
+                      pre-drain behavior — builder races against refcount, errors if >0.
+                    properties:
+                      deleteEmptyDir:
+                        default: true
+                        description: DeleteEmptyDir allows eviction of pods with emptyDir
+                          volumes.
+                        type: boolean
+                      enable:
+                        default: true
+                        description: |-
+                          Enable cordon+drain before the builder pod runs. Disable on
+                          single-node dev clusters where the controller is on the node
+                          being upgraded.
+                        type: boolean
+                      force:
+                        description: Force eviction of pods not managed by a controller
+                          (bare pods).
+                        type: boolean
+                      timeoutSeconds:
+                        default: 600
+                        description: TimeoutSeconds is the drain deadline. Default
+                          600s.
+                        format: int32
+                        type: integer
+                    type: object
+                  forceUnload:
+                    description: |-
+                      ForceUnload SIGKILLs every process holding /dev/tenstorrent (via
+                      /proc/*/fd walk) before rmmod when the loaded module's refcount is
+                      non-zero. Default (false) is the safe path: the builder pod errors
+                      and waits for the next reconcile, letting the operator drain
+                      workloads manually. Set true on clusters where you'd rather lose
+                      in-flight workloads than block a driver upgrade.
+                    type: boolean
+                type: object
               version:
                 description: |-
                   Version is the tt-kmd release, e.g. "2.8.0". Maps to the upstream tag

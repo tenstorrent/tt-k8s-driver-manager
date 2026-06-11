@@ -24,19 +24,62 @@ type TenstorrentDriverPolicySpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
+	// UpgradePolicy controls how the controller drives kmd version
+	// transitions: what to do when a node has device-using workloads
+	// blocking rmmod, drain config, timeouts. Modeled on
+	// TenstorrentFirmwarePolicy.UpgradePolicy (same shape, ttdp-relevant
+	// subset).
+	// +optional
+	UpgradePolicy UpgradePolicy `json:"upgradePolicy,omitempty"`
+
+	// Installer overrides the installer image / pull policy. Useful for dev
+	// iteration on the install.sh entrypoint.
+	// +optional
+	Installer *InstallerOverride `json:"installer,omitempty"`
+}
+
+// UpgradePolicy controls the controller's per-node kmd-upgrade behavior.
+type UpgradePolicy struct {
+	// Drain controls cordon + device-pod eviction before the builder pod
+	// attempts rmmod. When disabled the controller falls back to the
+	// pre-drain behavior — builder races against refcount, errors if >0.
+	// +optional
+	Drain DrainPolicy `json:"drain,omitempty"`
+
 	// ForceUnload SIGKILLs every process holding /dev/tenstorrent (via
-	// `fuser -k`) before rmmod when the loaded module's refcount is
+	// /proc/*/fd walk) before rmmod when the loaded module's refcount is
 	// non-zero. Default (false) is the safe path: the builder pod errors
 	// and waits for the next reconcile, letting the operator drain
 	// workloads manually. Set true on clusters where you'd rather lose
 	// in-flight workloads than block a driver upgrade.
 	// +optional
 	ForceUnload bool `json:"forceUnload,omitempty"`
+}
 
-	// Installer overrides the installer image / pull policy. Useful for dev
-	// iteration on the install.sh entrypoint.
+// DrainPolicy mirrors firmware/v1alpha1.DrainPolicy but is duplicated to
+// keep the driver and firmware APIs independent — same shape, evolution
+// can diverge.
+type DrainPolicy struct {
+	// Enable cordon+drain before the builder pod runs. Disable on
+	// single-node dev clusters where the controller is on the node
+	// being upgraded.
+	// +kubebuilder:default=true
 	// +optional
-	Installer *InstallerOverride `json:"installer,omitempty"`
+	Enable *bool `json:"enable,omitempty"`
+
+	// Force eviction of pods not managed by a controller (bare pods).
+	// +optional
+	Force bool `json:"force,omitempty"`
+
+	// DeleteEmptyDir allows eviction of pods with emptyDir volumes.
+	// +kubebuilder:default=true
+	// +optional
+	DeleteEmptyDir *bool `json:"deleteEmptyDir,omitempty"`
+
+	// TimeoutSeconds is the drain deadline. Default 600s.
+	// +kubebuilder:default=600
+	// +optional
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
 type InstallerOverride struct {
