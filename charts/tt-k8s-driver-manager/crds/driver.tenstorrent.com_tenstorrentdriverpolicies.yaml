@@ -23,8 +23,11 @@ spec:
     - jsonPath: .status.summary.matched
       name: Matched
       type: integer
-    - jsonPath: .status.summary.ready
-      name: Ready
+    - jsonPath: .status.summary.upToDate
+      name: UpToDate
+      type: integer
+    - jsonPath: .status.summary.inProgress
+      name: InProgress
       type: integer
     - jsonPath: .status.summary.failed
       name: Failed
@@ -253,6 +256,54 @@ spec:
                 description: DesiredVersion mirrors spec.version for at-a-glance status
                   reads.
                 type: string
+              nodes:
+                description: |-
+                  Nodes lists per-node upgrade state, mirroring
+                  TenstorrentFirmwarePolicy.Status.Nodes — gives operators a
+                  per-node view without having to inspect the underlying DaemonSet
+                  pods. Updated on every reconcile.
+                items:
+                  description: |-
+                    DriverNodeStatus captures the per-node upgrade state for a ttdp CR.
+                    Modeled on firmware/v1alpha1.NodeStatus.
+                  properties:
+                    currentVersion:
+                      description: |-
+                        CurrentVersion is the tt-kmd version currently loaded on this node,
+                        reported by the installer pod's TT_KMD_VERSION env (ground-truth
+                        for what was last successfully installed).
+                      type: string
+                    lastTransitionTime:
+                      description: LastTransitionTime is when the state last changed.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        Message is human-readable context, surfaced when the state isn't
+                        self-explanatory (e.g. "PDB blocking eviction of pod X").
+                      type: string
+                    name:
+                      description: Name is the Node name.
+                      type: string
+                    state:
+                      description: State is the per-node upgrade state.
+                      enum:
+                      - Pending
+                      - Cordoning
+                      - Draining
+                      - Upgrading
+                      - Uncordoning
+                      - Done
+                      - Failed
+                      type: string
+                  required:
+                  - name
+                  - state
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               observedGeneration:
                 format: int64
                 type: integer
@@ -271,12 +322,24 @@ spec:
                     description: Failed counts pods in CrashLoopBackoff or Error state.
                     format: int32
                     type: integer
+                  inProgress:
+                    description: |-
+                      InProgress counts nodes mid-transition (Cordoning / Draining /
+                      Upgrading / Uncordoning).
+                    format: int32
+                    type: integer
                   matched:
                     description: Matched is the number of nodes the selector currently
                       picks up.
                     format: int32
                     type: integer
                   ready:
+                    format: int32
+                    type: integer
+                  upToDate:
+                    description: |-
+                      UpToDate counts nodes whose loaded kmd version matches spec.version
+                      AND whose installer pod reports Ready.
                     format: int32
                     type: integer
                 required:

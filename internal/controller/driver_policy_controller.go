@@ -296,8 +296,149 @@ func (r *DriverPolicyReconciler) updateStatus(
 		}
 	}
 
+	// Populate per-node state. Best-effort: errors in computing per-node
+	// state don't block the status update — the summary still goes out.
+	if err := r.populateNodeStatuses(ctx, cr); err != nil {
+		log.FromContext(ctx).Error(err, "compute per-node status")
+	}
+
 	setDriverConditions(cr)
 	return r.Status().Update(ctx, cr)
+}
+
+// populateNodeStatuses fills cr.Status.Nodes + cr.Status.Summary.UpToDate /
+// InProgress by combining: (a) the set of matched nodes, (b) the installer
+// pod on each node and its readiness, (c) cordon ownership from the
+// node's annotations.
+func (r *DriverPolicyReconciler) populateNodeStatuses(
+	ctx context.Context, cr *driverv1alpha1.TenstorrentDriverPolicy,
+) error {
+	nodes, err := r.listMatchedNodes(ctx, cr)
+	if err != nil {
+		return fmt.Errorf("list matched nodes: %w", err)
+	}
+
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(operatorNamespace()),
+		client.MatchingLabels{"driver.tenstorrent.com/cr": cr.Name},
+	); err != nil {
+		return fmt.Errorf("list installer pods: %w", err)
+	}
+	byNode := map[string]podInfo{}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.Spec.NodeName == "" {
+			continue
+		}
+		var rc int32
+		if len(p.Status.ContainerStatuses) > 0 {
+			rc = p.Status.ContainerStatuses[0].RestartCount
+		}
+		info := podInfo{version: podEnv(p, "TT_KMD_VERSION"), restartCount: rc}
+		for _, c := range p.Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+				info.ready = true
+				break
+			}
+		}
+		byNode[p.Spec.NodeName] = info
+	}
+
+	// Preserve LastTransitionTime when state hasn't changed.
+	prev := map[string]driverv1alpha1.DriverNodeStatus{}
+	for _, ns := range cr.Status.Nodes {
+		prev[ns.Name] = ns
+	}
+
+	out := make([]driverv1alpha1.DriverNodeStatus, 0, len(nodes))
+	var upToDate, inProgress int32
+	for i := range nodes {
+		node := &nodes[i]
+		info := byNode[node.Name]
+		state := computeDriverNodeState(node, info, cr)
+		ns := driverv1alpha1.DriverNodeStatus{
+			Name:           node.Name,
+			State:          state,
+			CurrentVersion: info.version,
+		}
+		if old, ok := prev[node.Name]; ok && old.State == state {
+			ns.LastTransitionTime = old.LastTransitionTime
+		} else {
+			ns.LastTransitionTime = metav1.Now()
+		}
+		if state == driverv1alpha1.DriverNodeStateFailed && info.restartCount > 0 {
+			ns.Message = fmt.Sprintf("installer pod CrashLoopBackOff (restarts=%d)", info.restartCount)
+		}
+		out = append(out, ns)
+
+		switch state {
+		case driverv1alpha1.DriverNodeStateDone:
+			upToDate++
+		case driverv1alpha1.DriverNodeStateCordoning,
+			driverv1alpha1.DriverNodeStateDraining,
+			driverv1alpha1.DriverNodeStateUpgrading,
+			driverv1alpha1.DriverNodeStateUncordoning:
+			inProgress++
+		}
+	}
+	cr.Status.Nodes = out
+	cr.Status.Summary.UpToDate = upToDate
+	cr.Status.Summary.InProgress = inProgress
+	return nil
+}
+
+// podInfo for computeDriverNodeState — duplicated from populateNodeStatuses
+// because Go anon-struct types don't carry across function boundaries.
+type podInfo struct {
+	version      string
+	ready        bool
+	restartCount int32
+}
+
+// computeDriverNodeState derives the per-node state from cordon/pod
+// signals. The state model collapses across both drain-enabled and
+// drain-disabled paths — for the latter, Cordoning / Draining /
+// Uncordoning are never observed.
+func computeDriverNodeState(
+	node *corev1.Node, info podInfo, cr *driverv1alpha1.TenstorrentDriverPolicy,
+) driverv1alpha1.DriverNodeState {
+	target := cr.Spec.Version
+	cordonedByUs := node.Annotations[AnnoDriverCordonedBy] == cr.Name
+
+	// Failed: pod has restarted ≥3 times (CrashLoopBackOff threshold) AND
+	// isn't currently Ready. Stays Failed until restarts settle.
+	if info.restartCount >= 3 && !info.ready {
+		return driverv1alpha1.DriverNodeStateFailed
+	}
+
+	// Done: pod is Ready against the target version.
+	if info.ready && info.version == target {
+		if cordonedByUs {
+			// We cordoned this node but haven't uncordoned yet — between
+			// successful insmod and the next reconcile that calls
+			// uncordonReadyNodes. Surface as Uncordoning.
+			return driverv1alpha1.DriverNodeStateUncordoning
+		}
+		return driverv1alpha1.DriverNodeStateDone
+	}
+
+	// If we have a builder pod templated against the target version (but
+	// it isn't Ready yet), the node is mid-Upgrading regardless of cordon
+	// state.
+	if info.version == target {
+		return driverv1alpha1.DriverNodeStateUpgrading
+	}
+
+	// Builder pod targets an older version (DS hasn't rolled this node
+	// yet) but we've already cordoned → drain is in progress.
+	if cordonedByUs {
+		return driverv1alpha1.DriverNodeStateDraining
+	}
+
+	// No cordon yet — first reconcile after a version bump, or
+	// drain.enable=false.
+	return driverv1alpha1.DriverNodeStatePending
 }
 
 func setDriverConditions(cr *driverv1alpha1.TenstorrentDriverPolicy) {
