@@ -376,7 +376,7 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 					// shares the host's PID namespace. Without hostPID the
 					// builder's /proc is just its own one process and fuser-k
 					// is a no-op.
-					HostPID:            cr.Spec.ForceUnload,
+					HostPID:            cr.Spec.UpgradePolicy.ForceUnload,
 					ServiceAccountName: envOrDefault("INSTALLER_SERVICE_ACCOUNT", "tt-k8s-driver-manager-installer"),
 					Tolerations:        []corev1.Toleration{{Operator: corev1.TolerationOpExists}},
 					Affinity: &corev1.Affinity{
@@ -399,7 +399,7 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							// Surface spec.forceUnload to the entrypoint, which
 							// gates the `fuser -k /dev/tenstorrent/*` escape
 							// hatch when the loaded module's refcount > 0.
-							{Name: "TT_FORCE_UNLOAD", Value: boolEnv(cr.Spec.ForceUnload)},
+							{Name: "TT_FORCE_UNLOAD", Value: boolEnv(cr.Spec.UpgradePolicy.ForceUnload)},
 						},
 						SecurityContext: &corev1.SecurityContext{Privileged: &priv},
 						VolumeMounts: []corev1.VolumeMount{
