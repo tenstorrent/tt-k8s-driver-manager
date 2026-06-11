@@ -34,3 +34,11 @@ func envOrDefault(name, def string) string {
 	}
 	return def
 }
+
+// envSet returns (value, isSet) — distinguishes "set to empty" from
+// "unset". Useful when the empty string is a meaningful override (e.g.
+// DRIVER_DEPLOY_GATES="" intentionally disables the feature, but unset
+// means "fall back to the documented default").
+func envSet(name string) (string, bool) {
+	return os.LookupEnv(name)
+}

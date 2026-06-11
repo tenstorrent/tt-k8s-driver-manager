@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -15,7 +16,18 @@ import (
 	"github.com/tenstorrent/tt-k8s-driver-manager/internal/drain"
 )
 
-// driverDeployGates is the list of node-label keys the driver controller
+// defaultDriverDeployGates is the fallback list used when the
+// DRIVER_DEPLOY_GATES env var is unset. The chart sets the env from
+// controller.deployGates in values.yaml; this fallback exists so raw
+// `go run` and unit-test paths still get the documented default.
+//
+// Keep in sync with charts/tt-k8s-driver-manager/values.yaml's
+// controller.deployGates default — the chart is the user-facing knob.
+var defaultDriverDeployGates = []string{
+	"tenstorrent.com/deploy.tt-telemetry",
+}
+
+// driverDeployGates returns the list of node-label keys the controller
 // flips off (value="false") during a kmd upgrade to drain sibling DSes
 // that hold /dev/tenstorrent. After the per-node builder pod becomes
 // Ready against the new version, the label is REMOVED (not flipped to
@@ -23,10 +35,23 @@ import (
 // the DS back. Mirrors NVIDIA's `nvidia.com/gpu.deploy.<component>=true`
 // pattern, with the label keys chart-side instead of operator-side.
 //
-// Add new entries here when a future sibling chart picks up the same
-// drain-gate pattern (currently only tt-telemetry).
-var driverDeployGates = []string{
-	"tenstorrent.com/deploy.tt-telemetry",
+// Comma-separated `DRIVER_DEPLOY_GATES` env var overrides the default;
+// the chart threads `controller.deployGates` through to it. Whitespace
+// is trimmed and empty entries dropped. An empty env value disables the
+// gate flip entirely.
+func driverDeployGates() []string {
+	raw, set := envSet("DRIVER_DEPLOY_GATES")
+	if !set {
+		return defaultDriverDeployGates
+	}
+	out := []string{}
+	for _, g := range strings.Split(raw, ",") {
+		g = strings.TrimSpace(g)
+		if g != "" {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // drainEnabledForCR returns true when spec.upgradePolicy.drain.enable is
@@ -61,7 +86,7 @@ func flipDeployGatesOff(ctx context.Context, c client.Client, node *corev1.Node)
 	if node.Labels == nil {
 		node.Labels = map[string]string{}
 	}
-	for _, key := range driverDeployGates {
+	for _, key := range driverDeployGates() {
 		if node.Labels[key] != "false" {
 			node.Labels[key] = "false"
 			changed = true
@@ -80,7 +105,7 @@ func flipDeployGatesOff(ctx context.Context, c client.Client, node *corev1.Node)
 func removeDeployGates(ctx context.Context, c client.Client, node *corev1.Node) error {
 	patch := client.MergeFrom(node.DeepCopy())
 	changed := false
-	for _, key := range driverDeployGates {
+	for _, key := range driverDeployGates() {
 		if _, ok := node.Labels[key]; ok {
 			delete(node.Labels, key)
 			changed = true
