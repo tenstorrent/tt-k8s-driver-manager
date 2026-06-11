@@ -126,22 +126,49 @@ if [ "$LOADED" = "$EXPECTED" ]; then
     exec sleep infinity
 fi
 
+# dev_holder_pids walks /proc/<pid>/fd and prints PIDs whose readlink
+# target starts with /dev/tenstorrent/. We deliberately don't use
+# `fuser` here: psmisc fuser (23.4) silently returns "no holders" for
+# our char devices when run under hostPID — likely a cross-mount-NS
+# stat issue. Manually reading the fd symlinks works regardless of
+# which mount NS each holder lives in, as long as we run under
+# hostPID so other containers' processes are visible.
+dev_holder_pids() {
+    set +e
+    for pid_dir in /proc/[0-9]*; do
+        pid=${pid_dir##*/}
+        for fd in "$pid_dir"/fd/*; do
+            target=$(readlink "$fd" 2>/dev/null) || continue
+            case "$target" in
+                /dev/tenstorrent/*) echo "$pid"; break ;;
+            esac
+        done
+    done | sort -u
+    set -e
+}
+
 # --- 3. Container-managed: build + load -------------------------------
 if [ -n "$LOADED" ]; then
     if [ "$(refcnt)" -gt 0 ]; then
-        echo "tt-kmd ${LOADED} loaded with refcnt $(refcnt); holders: $(fuser /dev/tenstorrent/* 2>&1 || true)" >&2
+        holders=$(dev_holder_pids | tr '\n' ' ')
+        echo "tt-kmd ${LOADED} loaded with refcnt $(refcnt); holders: ${holders:-<none-visible — hostPID may not be set>}" >&2
         if [ "${TT_FORCE_UNLOAD:-false}" = "true" ]; then
-            # Opt-in escape hatch: SIGKILL every process holding /dev/tenstorrent
-            # so rmmod can proceed. Lossy — in-flight workloads on this node die.
-            echo "TT_FORCE_UNLOAD=true; SIGKILL'ing device holders via fuser -k" >&2
-            fuser -k /dev/tenstorrent/* 2>&1 || true
-            # Kernel needs a moment to drop the refs after the killed processes' fds close.
+            if [ -z "$holders" ]; then
+                echo "ERROR: TT_FORCE_UNLOAD=true but no holders visible in /proc — pod likely missing hostPID. Cannot kill." >&2
+                exit 1
+            fi
+            # Opt-in escape hatch: SIGKILL every process holding a
+            # /dev/tenstorrent/* fd. Lossy — in-flight workloads die.
+            echo "TT_FORCE_UNLOAD=true; SIGKILL'ing holders: $holders" >&2
+            # shellcheck disable=SC2086
+            kill -9 $holders 2>/dev/null || true
+            # Kernel drops refs as the killed processes' fds close.
             for _ in 1 2 3 4 5 6 7 8 9 10; do
                 [ "$(refcnt)" -eq 0 ] && break
                 sleep 1
             done
             if [ "$(refcnt)" -gt 0 ]; then
-                echo "ERROR: refcnt still $(refcnt) after fuser -k; giving up" >&2
+                echo "ERROR: refcnt still $(refcnt) after kill -9; giving up. Remaining holders: $(dev_holder_pids | tr '\n' ' ')" >&2
                 exit 1
             fi
         else
