@@ -17,6 +17,12 @@ const (
 	// there even if the node otherwise matches spec.nodeSelector.
 	LabelDriverSkip = "driver.tenstorrent.com/skip"
 
+	// Driver-side cordon annotations. Distinct prefix from the firmware
+	// controller's `firmware.tenstorrent.com/cordoned-*` so the two
+	// controllers don't accidentally uncordon each other's cordons.
+	AnnoDriverCordonedBy = "driver.tenstorrent.com/cordoned-by"
+	AnnoDriverCordonedAt = "driver.tenstorrent.com/cordoned-at"
+
 	// LabelInstallMode reports how tt-kmd got onto this node.
 	//   "container" — operator built + insmod'd via the builder pod
 	//   "host"      — pre-existing host install (DKMS, apt, tt-ansible).

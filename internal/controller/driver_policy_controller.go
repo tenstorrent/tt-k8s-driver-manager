@@ -49,6 +49,7 @@ type DriverPolicyReconciler struct {
 // +kubebuilder:rbac:groups=apps,resources=daemonsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 
 func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("ttdp", req.Name)
@@ -92,6 +93,18 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	default:
 		// Update if spec drift (most commonly: version change).
 		if !cr.Spec.Paused && daemonSetNeedsUpdate(existing, desiredDS) {
+			// Cordon matched nodes + evict device-using pods BEFORE bumping
+			// the DS template. By the time the DS controller starts rolling
+			// new builder pods, each node should already have refcnt=0 so
+			// rmmod succeeds — no forceUnload needed for the common case.
+			// Best-effort: errors on individual nodes are logged, not
+			// returned; the builder's existing refcnt check is the safety
+			// net.
+			if drainEnabledForCR(cr) {
+				if err := r.prepareUpgrade(ctx, cr); err != nil {
+					logger.Error(err, "pre-upgrade drain")
+				}
+			}
 			existing.Spec = desiredDS.Spec
 			if existing.Annotations == nil {
 				existing.Annotations = map[string]string{}
@@ -118,6 +131,15 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if existing != nil {
 		if err := r.syncKMDVersionLabels(ctx, cr, existing); err != nil {
 			logger.Error(err, "sync kmd-version labels")
+		}
+	}
+
+	// Uncordon nodes whose builder pod is Ready against the current
+	// spec.Version. Skips nodes we didn't cordon (annotation mismatch),
+	// so external cordons are left alone.
+	if drainEnabledForCR(cr) && existing != nil {
+		if err := r.uncordonReadyNodes(ctx, cr, existing); err != nil {
+			logger.Error(err, "uncordon ready nodes")
 		}
 	}
 
