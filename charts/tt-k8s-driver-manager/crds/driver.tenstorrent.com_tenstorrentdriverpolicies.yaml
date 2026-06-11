@@ -60,6 +60,15 @@ spec:
             description: TenstorrentDriverPolicySpec declares the desired tt-kmd version
               for a set of nodes.
             properties:
+              forceUnload:
+                description: |-
+                  ForceUnload SIGKILLs every process holding /dev/tenstorrent (via
+                  `fuser -k`) before rmmod when the loaded module's refcount is
+                  non-zero. Default (false) is the safe path: the builder pod errors
+                  and waits for the next reconcile, letting the operator drain
+                  workloads manually. Set true on clusters where you'd rather lose
+                  in-flight workloads than block a driver upgrade.
+                type: boolean
               installer:
                 description: |-
                   Installer overrides the installer image / pull policy. Useful for dev
