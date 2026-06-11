@@ -129,10 +129,26 @@ fi
 # --- 3. Container-managed: build + load -------------------------------
 if [ -n "$LOADED" ]; then
     if [ "$(refcnt)" -gt 0 ]; then
-        echo "ERROR: tt-kmd ${LOADED} loaded with refcnt > 0; cannot reinstall ${EXPECTED}" >&2
-        echo "Holders: $(fuser /dev/tenstorrent/* 2>&1 || true)" >&2
-        echo "Drain workloads holding /dev/tenstorrent and let the next reconcile retry." >&2
-        exit 1
+        echo "tt-kmd ${LOADED} loaded with refcnt $(refcnt); holders: $(fuser /dev/tenstorrent/* 2>&1 || true)" >&2
+        if [ "${TT_FORCE_UNLOAD:-false}" = "true" ]; then
+            # Opt-in escape hatch: SIGKILL every process holding /dev/tenstorrent
+            # so rmmod can proceed. Lossy — in-flight workloads on this node die.
+            echo "TT_FORCE_UNLOAD=true; SIGKILL'ing device holders via fuser -k" >&2
+            fuser -k /dev/tenstorrent/* 2>&1 || true
+            # Kernel needs a moment to drop the refs after the killed processes' fds close.
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+                [ "$(refcnt)" -eq 0 ] && break
+                sleep 1
+            done
+            if [ "$(refcnt)" -gt 0 ]; then
+                echo "ERROR: refcnt still $(refcnt) after fuser -k; giving up" >&2
+                exit 1
+            fi
+        else
+            echo "ERROR: refcnt > 0 and forceUnload is false; cannot reinstall ${EXPECTED}" >&2
+            echo "Drain workloads holding /dev/tenstorrent (or set spec.forceUnload: true) and let the next reconcile retry." >&2
+            exit 1
+        fi
     fi
     echo "tt-kmd ${LOADED} loaded (refcnt=0); unloading to install ${EXPECTED}"
     rmmod "${MODULE}"

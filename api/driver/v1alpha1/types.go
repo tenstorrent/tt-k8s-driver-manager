@@ -24,6 +24,15 @@ type TenstorrentDriverPolicySpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 
+	// ForceUnload SIGKILLs every process holding /dev/tenstorrent (via
+	// `fuser -k`) before rmmod when the loaded module's refcount is
+	// non-zero. Default (false) is the safe path: the builder pod errors
+	// and waits for the next reconcile, letting the operator drain
+	// workloads manually. Set true on clusters where you'd rather lose
+	// in-flight workloads than block a driver upgrade.
+	// +optional
+	ForceUnload bool `json:"forceUnload,omitempty"`
+
 	// Installer overrides the installer image / pull policy. Useful for dev
 	// iteration on the install.sh entrypoint.
 	// +optional

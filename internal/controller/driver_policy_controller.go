@@ -390,6 +390,10 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							// Builder pod needs to know which node it's on
 							// to label that node post-detection.
 							{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
+							// Surface spec.forceUnload to the entrypoint, which
+							// gates the `fuser -k /dev/tenstorrent/*` escape
+							// hatch when the loaded module's refcount > 0.
+							{Name: "TT_FORCE_UNLOAD", Value: boolEnv(cr.Spec.ForceUnload)},
 						},
 						SecurityContext: &corev1.SecurityContext{Privileged: &priv},
 						VolumeMounts: []corev1.VolumeMount{
