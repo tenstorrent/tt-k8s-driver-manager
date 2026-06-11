@@ -15,10 +15,65 @@ import (
 	"github.com/tenstorrent/tt-k8s-driver-manager/internal/drain"
 )
 
+// driverDeployGates is the list of node-label keys the driver controller
+// flips off (value="false") during a kmd upgrade to drain sibling DSes
+// that hold /dev/tenstorrent. After the per-node builder pod becomes
+// Ready against the new version, the label is REMOVED (not flipped to
+// "true") so the chart's NotIn ["false"] semantic naturally schedules
+// the DS back. Mirrors NVIDIA's `nvidia.com/gpu.deploy.<component>=true`
+// pattern, with the label keys chart-side instead of operator-side.
+//
+// Add new entries here when a future sibling chart picks up the same
+// drain-gate pattern (currently only tt-telemetry).
+var driverDeployGates = []string{
+	"tenstorrent.com/deploy.tt-telemetry",
+}
+
 // drainEnabledForCR returns true when spec.upgradePolicy.drain.enable is
 // unset (default true via kubebuilder) or explicitly true.
 func drainEnabledForCR(cr *driverv1alpha1.TenstorrentDriverPolicy) bool {
 	return cr.Spec.UpgradePolicy.Drain.Enable == nil || *cr.Spec.UpgradePolicy.Drain.Enable
+}
+
+// flipDeployGatesOff patches each driverDeployGates label to "false" on
+// the given node so the corresponding sibling DSes' nodeAffinity stops
+// matching — DS controller deletes the pod, FDs close, refcnt drops.
+// Idempotent: a label already at "false" is a no-op.
+func flipDeployGatesOff(ctx context.Context, c client.Client, node *corev1.Node) error {
+	patch := client.MergeFrom(node.DeepCopy())
+	changed := false
+	if node.Labels == nil {
+		node.Labels = map[string]string{}
+	}
+	for _, key := range driverDeployGates {
+		if node.Labels[key] != "false" {
+			node.Labels[key] = "false"
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return c.Patch(ctx, node, patch)
+}
+
+// removeDeployGates deletes the driverDeployGates labels from the node
+// (rather than setting them back to "true"). The chart's nodeAffinity
+// is `NotIn ["false"]`, so absent and "true" both schedule — removal is
+// the cleanest "back to default" state.
+func removeDeployGates(ctx context.Context, c client.Client, node *corev1.Node) error {
+	patch := client.MergeFrom(node.DeepCopy())
+	changed := false
+	for _, key := range driverDeployGates {
+		if _, ok := node.Labels[key]; ok {
+			delete(node.Labels, key)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return c.Patch(ctx, node, patch)
 }
 
 // driverCordonOpts is the cordon owner/annotation set for the driver
@@ -90,6 +145,15 @@ func (r *DriverPolicyReconciler) prepareUpgrade(
 		if err := drain.CordonNode(ctx, r.Client, node, opts); err != nil {
 			logger.Error(err, "cordon node", "node", node.Name)
 			continue
+		}
+		// Flip sibling-DS deploy gates BEFORE evicting non-DS pods —
+		// eviction can't drain DS-owned holders (drain.go intentionally
+		// excludes them to avoid the respawn-loop), so the gate flip
+		// covers the cooperative-drain DS-side. DS controller deletes
+		// the pod whose nodeAffinity stops matching.
+		if err := flipDeployGatesOff(ctx, r.Client, node); err != nil {
+			logger.Error(err, "flip deploy gates off", "node", node.Name)
+			// continue — best effort
 		}
 		pods, err := drain.ListDevicePodsOnNode(
 			ctx, r.Client, node.Name, operatorNamespace(), force, drain.PodUsesTenstorrentDevice,
@@ -171,6 +235,12 @@ func (r *DriverPolicyReconciler) uncordonReadyNodes(
 		if err := drain.UncordonNode(ctx, r.Client, node, opts); err != nil {
 			logger.Error(err, "uncordon node", "node", node.Name)
 			continue
+		}
+		// Restore deploy gates so the sibling DSes reschedule on this
+		// node. Removing the labels (not setting them to "true") is the
+		// chart's "default scheduled" state.
+		if err := removeDeployGates(ctx, r.Client, node); err != nil {
+			logger.Error(err, "remove deploy gates", "node", node.Name)
 		}
 	}
 	return nil
