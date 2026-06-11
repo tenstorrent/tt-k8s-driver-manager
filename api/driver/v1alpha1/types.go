@@ -59,19 +59,51 @@ type UpgradePolicy struct {
 // DrainPolicy mirrors firmware/v1alpha1.DrainPolicy but is duplicated to
 // keep the driver and firmware APIs independent — same shape, evolution
 // can diverge.
+//
+// The drain runs in two passes, mirroring NVIDIA gpu-operator's
+// ENABLE_GPU_POD_EVICTION + ENABLE_AUTO_DRAIN split:
+//
+//  1. Targeted eviction — pods that explicitly declare /dev/tenstorrent
+//     use (hostPath). Gated by Enable.
+//  2. Full-node drain — every non-DS pod on the cordoned node, kubectl
+//     drain semantics. Catches privileged containers that get /dev via
+//     containerd's auto-mount (no explicit hostPath / resource request).
+//     Gated by FullNode.
 type DrainPolicy struct {
-	// Enable cordon+drain before the builder pod runs. Disable on
-	// single-node dev clusters where the controller is on the node
-	// being upgraded.
+	// Enable cordon + targeted device-pod eviction (pass 1) before the
+	// builder pod runs. Disable on single-node dev clusters where the
+	// controller is on the node being upgraded.
 	// +kubebuilder:default=true
 	// +optional
 	Enable *bool `json:"enable,omitempty"`
 
+	// FullNode triggers pass 2: evict every non-DS pod on the cordoned
+	// node (kubectl drain semantics). Required to drain privileged
+	// containers that don't declare /dev/tenstorrent use — the targeted
+	// pass 1 filter only catches explicit hostPath mounts or
+	// tenstorrent.com/* resource requests. Defaults true to mirror
+	// NVIDIA's ENABLE_AUTO_DRAIN; set false on multi-tenant nodes where
+	// collateral eviction of unrelated workloads is unacceptable.
+	// +kubebuilder:default=true
+	// +optional
+	FullNode *bool `json:"fullNode,omitempty"`
+
+	// PodSelectorLabel restricts the pass-2 full-node drain to pods
+	// matching this label selector (k8s syntax: "key=value", "key",
+	// "key notin (a,b)"). Empty = no restriction. Mirrors NVIDIA's
+	// DRAIN_POD_SELECTOR_LABEL — lets multi-tenant clusters opt their
+	// drainable workloads in by label instead of getting a blanket
+	// sweep.
+	// +optional
+	PodSelectorLabel string `json:"podSelectorLabel,omitempty"`
+
 	// Force eviction of pods not managed by a controller (bare pods).
+	// Applies to both passes.
 	// +optional
 	Force bool `json:"force,omitempty"`
 
-	// DeleteEmptyDir allows eviction of pods with emptyDir volumes.
+	// DeleteEmptyDir allows pass-2 eviction of pods with emptyDir
+	// volumes. Mirrors kubectl drain's --delete-emptydir-data.
 	// +kubebuilder:default=true
 	// +optional
 	DeleteEmptyDir *bool `json:"deleteEmptyDir,omitempty"`

@@ -145,20 +145,42 @@ spec:
                     properties:
                       deleteEmptyDir:
                         default: true
-                        description: DeleteEmptyDir allows eviction of pods with emptyDir
-                          volumes.
+                        description: |-
+                          DeleteEmptyDir allows pass-2 eviction of pods with emptyDir
+                          volumes. Mirrors kubectl drain's --delete-emptydir-data.
                         type: boolean
                       enable:
                         default: true
                         description: |-
-                          Enable cordon+drain before the builder pod runs. Disable on
-                          single-node dev clusters where the controller is on the node
-                          being upgraded.
+                          Enable cordon + targeted device-pod eviction (pass 1) before the
+                          builder pod runs. Disable on single-node dev clusters where the
+                          controller is on the node being upgraded.
                         type: boolean
                       force:
-                        description: Force eviction of pods not managed by a controller
-                          (bare pods).
+                        description: |-
+                          Force eviction of pods not managed by a controller (bare pods).
+                          Applies to both passes.
                         type: boolean
+                      fullNode:
+                        default: true
+                        description: |-
+                          FullNode triggers pass 2: evict every non-DS pod on the cordoned
+                          node (kubectl drain semantics). Required to drain privileged
+                          containers that don't declare /dev/tenstorrent use — the targeted
+                          pass 1 filter only catches explicit hostPath mounts or
+                          tenstorrent.com/* resource requests. Defaults true to mirror
+                          NVIDIA's ENABLE_AUTO_DRAIN; set false on multi-tenant nodes where
+                          collateral eviction of unrelated workloads is unacceptable.
+                        type: boolean
+                      podSelectorLabel:
+                        description: |-
+                          PodSelectorLabel restricts the pass-2 full-node drain to pods
+                          matching this label selector (k8s syntax: "key=value", "key",
+                          "key notin (a,b)"). Empty = no restriction. Mirrors NVIDIA's
+                          DRAIN_POD_SELECTOR_LABEL — lets multi-tenant clusters opt their
+                          drainable workloads in by label instead of getting a blanket
+                          sweep.
+                        type: string
                       timeoutSeconds:
                         default: 600
                         description: TimeoutSeconds is the drain deadline. Default
