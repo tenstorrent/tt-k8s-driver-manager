@@ -111,6 +111,15 @@ type TenstorrentDriverPolicyStatus struct {
 	// DaemonSet is the name of the DaemonSet this CR manages.
 	// +optional
 	DaemonSet string `json:"daemonSet,omitempty"`
+
+	// Nodes lists per-node upgrade state, mirroring
+	// TenstorrentFirmwarePolicy.Status.Nodes — gives operators a
+	// per-node view without having to inspect the underlying DaemonSet
+	// pods. Updated on every reconcile.
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Nodes []DriverNodeStatus `json:"nodes,omitempty"`
 }
 
 type DriverSummary struct {
@@ -122,14 +131,71 @@ type DriverSummary struct {
 	Available int32 `json:"available"`
 	// Failed counts pods in CrashLoopBackoff or Error state.
 	Failed int32 `json:"failed"`
+	// UpToDate counts nodes whose loaded kmd version matches spec.version
+	// AND whose installer pod reports Ready.
+	// +optional
+	UpToDate int32 `json:"upToDate,omitempty"`
+	// InProgress counts nodes mid-transition (Cordoning / Draining /
+	// Upgrading / Uncordoning).
+	// +optional
+	InProgress int32 `json:"inProgress,omitempty"`
 }
+
+// DriverNodeStatus captures the per-node upgrade state for a ttdp CR.
+// Modeled on firmware/v1alpha1.NodeStatus.
+type DriverNodeStatus struct {
+	// Name is the Node name.
+	Name string `json:"name"`
+
+	// State is the per-node upgrade state.
+	State DriverNodeState `json:"state"`
+
+	// CurrentVersion is the tt-kmd version currently loaded on this node,
+	// reported by the installer pod's TT_KMD_VERSION env (ground-truth
+	// for what was last successfully installed).
+	// +optional
+	CurrentVersion string `json:"currentVersion,omitempty"`
+
+	// Message is human-readable context, surfaced when the state isn't
+	// self-explanatory (e.g. "PDB blocking eviction of pod X").
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// LastTransitionTime is when the state last changed.
+	// +optional
+	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
+}
+
+// DriverNodeState mirrors firmware/v1alpha1.NodeState but uses Upgrading
+// (kmd build + insmod via the builder pod) where firmware uses Flashing.
+//
+//	Pending → Cordoning → Draining → Upgrading → Uncordoning → Done
+//	                                                       ↘ Failed
+//
+// Cordoning / Draining / Uncordoning are only visited when
+// spec.upgradePolicy.drain.enable is true; otherwise the controller goes
+// straight from Pending → Upgrading → Done.
+//
+// +kubebuilder:validation:Enum=Pending;Cordoning;Draining;Upgrading;Uncordoning;Done;Failed
+type DriverNodeState string
+
+const (
+	DriverNodeStatePending     DriverNodeState = "Pending"
+	DriverNodeStateCordoning   DriverNodeState = "Cordoning"
+	DriverNodeStateDraining    DriverNodeState = "Draining"
+	DriverNodeStateUpgrading   DriverNodeState = "Upgrading"
+	DriverNodeStateUncordoning DriverNodeState = "Uncordoning"
+	DriverNodeStateDone        DriverNodeState = "Done"
+	DriverNodeStateFailed      DriverNodeState = "Failed"
+)
 
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=ttdp
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.spec.version`
 // +kubebuilder:printcolumn:name="Matched",type=integer,JSONPath=`.status.summary.matched`
-// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.summary.ready`
+// +kubebuilder:printcolumn:name="UpToDate",type=integer,JSONPath=`.status.summary.upToDate`
+// +kubebuilder:printcolumn:name="InProgress",type=integer,JSONPath=`.status.summary.inProgress`
 // +kubebuilder:printcolumn:name="Failed",type=integer,JSONPath=`.status.summary.failed`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
