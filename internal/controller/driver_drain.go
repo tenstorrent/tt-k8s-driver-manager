@@ -55,9 +55,25 @@ func driverDeployGates() []string {
 }
 
 // drainEnabledForCR returns true when spec.upgradePolicy.drain.enable is
-// unset (default true via kubebuilder) or explicitly true.
+// unset (default true via kubebuilder) or explicitly true. Gates pass 1
+// (targeted /dev/tenstorrent-holder eviction).
 func drainEnabledForCR(cr *driverv1alpha1.TenstorrentDriverPolicy) bool {
 	return cr.Spec.UpgradePolicy.Drain.Enable == nil || *cr.Spec.UpgradePolicy.Drain.Enable
+}
+
+// fullNodeDrainEnabledForCR gates pass 2 (full-node drain). Default true
+// — mirrors NVIDIA's ENABLE_AUTO_DRAIN default. Catches privileged pods
+// that use /dev/tenstorrent via containerd auto-mount and so wouldn't
+// match the pass-1 hostPath filter.
+func fullNodeDrainEnabledForCR(cr *driverv1alpha1.TenstorrentDriverPolicy) bool {
+	return cr.Spec.UpgradePolicy.Drain.FullNode == nil || *cr.Spec.UpgradePolicy.Drain.FullNode
+}
+
+// deleteEmptyDirForCR returns true when spec.upgradePolicy.drain.deleteEmptyDir
+// is unset (default true) or explicitly true. Mirrors kubectl drain's
+// --delete-emptydir-data; pass 2 honors it.
+func deleteEmptyDirForCR(cr *driverv1alpha1.TenstorrentDriverPolicy) bool {
+	return cr.Spec.UpgradePolicy.Drain.DeleteEmptyDir == nil || *cr.Spec.UpgradePolicy.Drain.DeleteEmptyDir
 }
 
 // flipDeployGatesOff patches each driverDeployGates label to "false" on
@@ -149,6 +165,15 @@ func (r *DriverPolicyReconciler) listMatchedNodes(
 // already have refcnt=0 (in the common case) so rmmod succeeds without
 // needing the forceUnload SIGKILL path.
 //
+// Two-pass drain modeled on NVIDIA gpu-operator:
+//   - Pass 1 (gated by drain.enable, default true): evict pods that
+//     declare /dev/tenstorrent use via hostPath (drain.PodUsesTenstorrentDevice).
+//   - Pass 2 (gated by drain.fullNode, default true): evict every
+//     non-DS pod on the node — kubectl drain semantics. Catches
+//     privileged pods that get /dev via containerd's auto-mount and
+//     don't declare anything. Optionally restricted by
+//     drain.podSelectorLabel and gated against emptyDir loss.
+//
 // Best-effort: errors on individual nodes are logged and skipped rather
 // than aborting the whole reconcile. The builder pod's existing refcnt
 // check + forceUnload fallback covers the case where eviction didn't
@@ -165,6 +190,12 @@ func (r *DriverPolicyReconciler) prepareUpgrade(
 	opts := driverCordonOpts(cr.Name)
 	force := cr.Spec.UpgradePolicy.Drain.Force
 
+	pass2Filter, err := buildFullNodeDrainFilter(cr)
+	if err != nil {
+		return fmt.Errorf("build full-node drain filter: %w", err)
+	}
+	runFullNode := fullNodeDrainEnabledForCR(cr)
+
 	for i := range nodes {
 		node := &nodes[i]
 		if err := drain.CordonNode(ctx, r.Client, node, opts); err != nil {
@@ -180,27 +211,70 @@ func (r *DriverPolicyReconciler) prepareUpgrade(
 			logger.Error(err, "flip deploy gates off", "node", node.Name)
 			// continue — best effort
 		}
-		pods, err := drain.ListDevicePodsOnNode(
-			ctx, r.Client, node.Name, operatorNamespace(), force, drain.PodUsesTenstorrentDevice,
-		)
-		if err != nil {
-			logger.Error(err, "list device pods", "node", node.Name)
-			continue
-		}
-		for j := range pods {
-			pod := &pods[j]
-			if err := drain.EvictPod(ctx, r.Client, pod); err != nil {
-				if _, ok := err.(drain.ErrEvictionBlocked); ok {
-					// PDB block — transient, picked up next reconcile.
-					logger.Info("eviction blocked by PDB; will retry",
-						"pod", pod.Name, "namespace", pod.Namespace)
-					continue
-				}
-				logger.Error(err, "evict pod", "pod", pod.Name, "namespace", pod.Namespace)
-			}
+		r.evictMatching(ctx, node.Name, force, drain.PodUsesTenstorrentDevice, "pass1")
+		if runFullNode {
+			r.evictMatching(ctx, node.Name, force, pass2Filter, "pass2")
 		}
 	}
 	return nil
+}
+
+// evictMatching lists pods on the node matching `filter` and evicts
+// each via the Eviction subresource. Best-effort: PDB blocks and other
+// errors are logged and the loop continues. `passLabel` is just a log
+// tag so pass 1 / pass 2 can be told apart in events.
+func (r *DriverPolicyReconciler) evictMatching(
+	ctx context.Context,
+	nodeName string,
+	force bool,
+	filter drain.PodFilter,
+	passLabel string,
+) {
+	logger := log.FromContext(ctx)
+	pods, err := drain.ListDevicePodsOnNode(
+		ctx, r.Client, nodeName, operatorNamespace(), force, filter,
+	)
+	if err != nil {
+		logger.Error(err, "list pods for drain", "node", nodeName, "pass", passLabel)
+		return
+	}
+	for j := range pods {
+		pod := &pods[j]
+		if err := drain.EvictPod(ctx, r.Client, pod); err != nil {
+			if _, ok := err.(drain.ErrEvictionBlocked); ok {
+				logger.Info("eviction blocked by PDB; will retry",
+					"pod", pod.Name, "namespace", pod.Namespace, "pass", passLabel)
+				continue
+			}
+			logger.Error(err, "evict pod",
+				"pod", pod.Name, "namespace", pod.Namespace, "pass", passLabel)
+		}
+	}
+}
+
+// buildFullNodeDrainFilter returns the PodFilter for pass 2 — match
+// everything, then strip pods whose emptyDir we shouldn't blow away and
+// pods that don't match an explicit podSelectorLabel. Returns an error
+// if the user-supplied podSelectorLabel doesn't parse.
+func buildFullNodeDrainFilter(cr *driverv1alpha1.TenstorrentDriverPolicy) (drain.PodFilter, error) {
+	sel := labels.Everything()
+	if raw := cr.Spec.UpgradePolicy.Drain.PodSelectorLabel; raw != "" {
+		parsed, err := labels.Parse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse podSelectorLabel %q: %w", raw, err)
+		}
+		sel = parsed
+	}
+	deleteEmpty := deleteEmptyDirForCR(cr)
+	return func(p *corev1.Pod) bool {
+		if !sel.Matches(labels.Set(p.Labels)) {
+			return false
+		}
+		if !deleteEmpty && drain.PodHasEmptyDir(p) {
+			return false
+		}
+		return true
+	}, nil
 }
 
 // uncordonReadyNodes uncordons every matched node we previously cordoned

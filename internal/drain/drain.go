@@ -157,6 +157,19 @@ func PodIsBare(p *corev1.Pod) bool {
 	return len(p.OwnerReferences) == 0
 }
 
+// PodHasEmptyDir reports whether the pod has any emptyDir volume —
+// kubectl drain's --delete-emptydir-data gate. The full-node drain pass
+// uses this to skip pods whose emptyDir data would be silently lost
+// unless the operator explicitly opted in.
+func PodHasEmptyDir(p *corev1.Pod) bool {
+	for _, v := range p.Spec.Volumes {
+		if v.EmptyDir != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func IsTerminalPhase(phase corev1.PodPhase) bool {
 	return phase == corev1.PodSucceeded || phase == corev1.PodFailed
 }

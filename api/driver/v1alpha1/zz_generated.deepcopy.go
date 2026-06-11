@@ -17,6 +17,11 @@ func (in *DrainPolicy) DeepCopyInto(out *DrainPolicy) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.FullNode != nil {
+		in, out := &in.FullNode, &out.FullNode
+		*out = new(bool)
+		**out = **in
+	}
 	if in.DeleteEmptyDir != nil {
 		in, out := &in.DeleteEmptyDir, &out.DeleteEmptyDir
 		*out = new(bool)
