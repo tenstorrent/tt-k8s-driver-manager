@@ -41,6 +41,15 @@ spec:
               value: {{ .Values.controller.requireTenstorrentLabel | quote }}
             - name: INSTALLER_SERVICE_ACCOUNT
               value: {{ include "tt-k8s-driver-manager.fullname" . }}-installer
+            # Deploy gates the driver controller flips per-node during a
+            # kmd upgrade (NVIDIA gpu-operator pattern). Set on values
+            # only — unset means "use the controller's compiled-in
+            # default" (today: tenstorrent.com/deploy.tt-telemetry). An
+            # explicit empty list disables the feature.
+            {{- if hasKey .Values.controller "deployGates" }}
+            - name: DRIVER_DEPLOY_GATES
+              value: {{ join "," .Values.controller.deployGates | quote }}
+            {{- end }}
           ports:
             - { name: metrics, containerPort: 8080 }
             - { name: probe,   containerPort: 8081 }

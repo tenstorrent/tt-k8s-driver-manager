@@ -26,6 +26,21 @@ controller:
   replicas: 1
   leaderElection: false
   requireTenstorrentLabel: "true"
+  # Node-label keys the controller flips off (value="false") during a
+  # kmd upgrade to drain sibling DSes that hold /dev/tenstorrent. Each
+  # listed key is set to "false" on every matched node BEFORE the
+  # DaemonSet template is bumped (sibling DS's nodeAffinity stops
+  # matching → DS controller deletes the pod → FDs close → refcnt
+  # drops). The labels are REMOVED (not flipped back to "true") after
+  # the per-node builder pod becomes Ready against the new version —
+  # the chart's NotIn ["false"] semantic schedules the DS back when
+  # the label is absent.
+  #
+  # Unset (key missing entirely) → controller uses its compiled-in
+  # default (today: tenstorrent.com/deploy.tt-telemetry). An explicit
+  # empty list disables the gate-flip step entirely.
+  deployGates:
+    - "tenstorrent.com/deploy.tt-telemetry"
   resources:
     limits:
       cpu: 500m
