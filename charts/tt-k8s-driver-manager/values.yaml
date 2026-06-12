@@ -41,6 +41,11 @@ controller:
   # empty list disables the gate-flip step entirely.
   deployGates:
     - "tenstorrent.com/deploy.tt-telemetry"
+  # Extra environment variables appended to the controller's env (and
+  # propagated to spawned builder pods for HTTPS_PROXY/HTTP_PROXY/NO_PROXY
+  # — needed on clusters whose pod egress requires a proxy, since the
+  # builder git-clones tt-kmd source on cache miss).
+  extraEnv: []
   resources:
     limits:
       cpu: 500m

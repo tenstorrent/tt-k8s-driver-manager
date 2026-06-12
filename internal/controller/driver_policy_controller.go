@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -513,6 +514,26 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 		),
 	}}
 
+	builderEnv := []corev1.EnvVar{
+		{Name: "TT_KMD_VERSION", Value: cr.Spec.Version},
+		// Builder pod needs to know which node it's on
+		// to label that node post-detection.
+		{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
+		// Surface spec.forceUnload to the entrypoint, which
+		// gates the `fuser -k /dev/tenstorrent/*` escape
+		// hatch when the loaded module's refcount > 0.
+		{Name: "TT_FORCE_UNLOAD", Value: boolEnv(cr.Spec.UpgradePolicy.ForceUnload)},
+	}
+	// Propagate proxy env from the controller's own pod to the spawned
+	// builder. On cache miss the builder git-clones tt-kmd source from
+	// github.com; on clusters whose pod egress goes through a proxy
+	// (e.g. CI behind squid), the clone fails without these set.
+	for _, k := range []string{"HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy"} {
+		if v := os.Getenv(k); v != "" {
+			builderEnv = append(builderEnv, corev1.EnvVar{Name: k, Value: v})
+		}
+	}
+
 	ds := &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -554,16 +575,7 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 						Name:            "builder",
 						Image:           image,
 						ImagePullPolicy: pull,
-						Env: []corev1.EnvVar{
-							{Name: "TT_KMD_VERSION", Value: cr.Spec.Version},
-							// Builder pod needs to know which node it's on
-							// to label that node post-detection.
-							{Name: "NODE_NAME", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"}}},
-							// Surface spec.forceUnload to the entrypoint, which
-							// gates the `fuser -k /dev/tenstorrent/*` escape
-							// hatch when the loaded module's refcount > 0.
-							{Name: "TT_FORCE_UNLOAD", Value: boolEnv(cr.Spec.UpgradePolicy.ForceUnload)},
-						},
+						Env:             builderEnv,
 						SecurityContext: &corev1.SecurityContext{Privileged: &priv},
 						VolumeMounts: []corev1.VolumeMount{
 							// Kernel build tree for headers. On Ubuntu the
