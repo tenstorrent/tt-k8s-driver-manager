@@ -77,19 +77,20 @@ spec:
 ```yaml
 spec:
   version: "19.8.0"
-  force: true
+  flasher:
+    forceWrite: true
 ```
 
-The controller will re-create Jobs for nodes already at 19.8.0 because
-`force: true` toggles a hash field on the Job — tt-flash gets `--force`,
-overwrites, readback re-asserts.
+`forceWrite` bypasses the "already at target" short-circuit and passes
+`--force` to tt-flash — overwrite, readback re-asserts.
 
 ### Downgrade
 
 ```yaml
 spec:
   version: "19.7.0"
-  force: true            # 19.8.0 → 19.7.0 needs --force
+  flasher:
+    forceWrite: true     # 19.8.0 → 19.7.0 needs --force
   upgradePolicy:
     maxParallel: 1       # downgrade is the riskiest direction; serial
 ```

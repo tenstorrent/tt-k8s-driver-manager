@@ -30,7 +30,7 @@ managing the driver.
 
 **Driver** (`TenstorrentDriverPolicy`, short name `ttdp`) — pins a `tt-kmd`
 version on selected nodes; the operator builds + insmods it via a per-CR
-DaemonSet:
+DaemonSet, cordoning + draining each node before swapping kernel modules:
 
 ```yaml
 apiVersion: driver.tenstorrent.com/v1alpha1
@@ -40,6 +40,11 @@ metadata:
 spec:
   version: "2.8.0"      # required: a tt-kmd release tag minus ttkmd-
   nodeSelector: {}      # matches all nodes; ANDed with the NFD tt-present label
+  upgradePolicy:
+    drain:
+      enable: true      # cordon + evict /dev/tenstorrent holders before rmmod
+      fullNode: true    # also run full kubectl-drain semantics (NVIDIA pattern)
+    forceUnload: false  # set true to SIGKILL surviving holders before rmmod
 ```
 
 **Firmware** (`TenstorrentFirmwarePolicy`, short name `ttfwp`) — pins a
@@ -61,8 +66,8 @@ spec:
 ```
 
 See [`docs/driver.md`](docs/driver.md) and [`docs/firmware.md`](docs/firmware.md)
-for the full spec — paused flag, force flag, per-CR image overrides, skip
-labels, multi-pool examples.
+for the full spec — drain policy, forceUnload, deploy gates, per-CR image
+overrides, skip labels, multi-pool examples.
 
 After ~1 minute the driver is loaded on every Tenstorrent node, `tt-smi`
 is installed at `/usr/local/bin/tt-smi`, and the operator stamps version
@@ -121,8 +126,8 @@ ownership"), set `driver.tenstorrent.com/skip=true` on the node.
 | | |
 |---|---|
 | [Install](docs/install.md) | Prerequisites, image-pull setup, NFD, verifying |
-| [Drivers](docs/driver.md) | `TenstorrentDriverPolicy`, upgrades, install-mode, skip label |
-| [Firmware](docs/firmware.md) | `TenstorrentFirmwarePolicy`, drain config, force flag |
+| [Drivers](docs/driver.md) | `TenstorrentDriverPolicy`, upgrade flow, drain policy, deploy gates, install-mode, skip label |
+| [Firmware](docs/firmware.md) | `TenstorrentFirmwarePolicy`, drain config, force-write flag |
 | [Upgrades](docs/upgrades.md) | Rolling-update semantics for tt-kmd, tt-smi, firmware, operator itself |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures and how to read the symptoms |
 
