@@ -50,6 +50,9 @@ spec:
             - name: DRIVER_DEPLOY_GATES
               value: {{ join "," .Values.controller.deployGates | quote }}
             {{- end }}
+            {{- with .Values.controller.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           ports:
             - { name: metrics, containerPort: 8080 }
             - { name: probe,   containerPort: 8081 }
