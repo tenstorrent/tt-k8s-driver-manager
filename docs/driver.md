@@ -46,6 +46,13 @@ What happens:
 | `version` | required | tt-kmd release tag, minus `ttkmd-` prefix. Must match `^[0-9]+\.[0-9]+\.[0-9]+$`. |
 | `nodeSelector` | required | Standard `metav1.LabelSelector`. Empty `{}` matches all nodes (still ANDed with NFD present-label, so only Tenstorrent nodes get hit). |
 | `paused` | `false` | Soft stop. Controller stops reconciling; existing DS keeps running. Useful for blast-radius pauses without deleting the CR. |
+| `upgradePolicy.drain.enable` | `true` | Pass 1: cordon + evict pods that `hostPath`-mount `/dev/tenstorrent` before the DS template is bumped, so refcount has dropped to 0 by the time the new builder pod runs `rmmod`. See [Upgrade flow](#upgrade-flow). |
+| `upgradePolicy.drain.fullNode` | `true` | Pass 2: full-node `kubectl drain` semantics — evict every non-DS pod on the cordoned node. Catches privileged containers that get `/dev/tenstorrent` via containerd auto-mount (no explicit hostPath). Mirrors NVIDIA's `ENABLE_AUTO_DRAIN`. |
+| `upgradePolicy.drain.podSelectorLabel` | `""` | Restricts pass 2 to pods matching this selector (`key=value`, `key`, `key notin (a,b)`). Empty = sweep everything. Mirrors NVIDIA's `DRAIN_POD_SELECTOR_LABEL`. |
+| `upgradePolicy.drain.force` | `false` | Evict bare pods (no controller) instead of skipping. Applies to both passes. |
+| `upgradePolicy.drain.deleteEmptyDir` | `true` | Pass 2 evicts pods with `emptyDir` volumes (kubectl drain's `--delete-emptydir-data`). |
+| `upgradePolicy.drain.timeoutSeconds` | `600` | Per-node drain deadline. |
+| `upgradePolicy.forceUnload` | `false` | Last resort: if `refcnt>0` after drain, the builder pod walks `/proc/*/fd` and SIGKILLs every process holding `/dev/tenstorrent` before `rmmod`. Off by default — prefer draining over killing workloads. |
 | `installer.image` | chart's `driver.image` | Per-CR override of the builder image. Useful for canary-ing a new builder. |
 | `installer.imagePullPolicy` | `IfNotPresent` | Override for the above. Set to `Always` when iterating on a moving image tag. |
 
@@ -119,24 +126,64 @@ Bump `spec.version`:
 kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.8.0"}}'
 ```
 
+Per-node state machine (mirrors `ttfwp`):
+
+```
+Pending → Cordoning → Draining → Upgrading → Uncordoning → Done
+                                                       ↘ Failed
+```
+
+Cordoning / Draining / Uncordoning are skipped when
+`upgradePolicy.drain.enable=false`. Per-node state is surfaced on
+`status.nodes[]` — see [Watch progress](#watch-progress).
+
 What the controller does:
 
-1. Re-renders the DS pod template with the new `TT_KMD_VERSION` env.
-2. Computes a sha256 hash of the template, stamps it on the DS as
-   `driver.tenstorrent.com/template-hash`.
-3. Updates the DS. K8s rolling update kicks in with `maxUnavailable: 1`
-   — one node at a time.
+1. Before bumping the DS template, **cordons matched nodes** and flips
+   `controller.deployGates` labels (default
+   `tenstorrent.com/deploy.tt-telemetry=false`) so sibling DaemonSets
+   that hold `/dev/tenstorrent` evict themselves.
+2. **Drains** each node in two passes: pass 1 evicts pods that
+   `hostPath`-mount `/dev/tenstorrent`; pass 2 (gated by
+   `drain.fullNode`, default on) runs full `kubectl drain` semantics.
+3. Re-renders the DS pod template with the new `TT_KMD_VERSION` env
+   and a sha256 `driver.tenstorrent.com/template-hash`. K8s rolling
+   update kicks in with `maxUnavailable: 1`.
 4. On each new pod start, entrypoint sees `LOADED != EXPECTED`, checks
-   refcnt (must be 0 → no workload holding the device), runs
-   `rmmod tenstorrent`, then either pulls from `/var/cache/tt-kmd/<kver>/
-   <new-version>/` (cache hit, ~5s total) or clones tt-kmd + `make
-   modules` (cache miss, ~30-90s) and `insmod`s.
+   refcnt; with the drain done it's normally 0. `forceUnload=true` =
+   SIGKILL holders via `/proc/*/fd` walk before `rmmod`. Then either
+   pulls from `/var/cache/tt-kmd/<kver>/<new-version>/` (cache hit, ~5s
+   total) or clones tt-kmd + `make modules` (cache miss, ~30-90s) and
+   `insmod`s.
 5. Pod's readiness probe (`/sys/module/tenstorrent/version` matches
-   `$TT_KMD_VERSION`) passes; pod becomes Ready; rolling update advances
-   to the next node.
+   `$TT_KMD_VERSION`) passes; controller **uncordons** the node and
+   removes the deploy-gate labels (sibling DSes reschedule); rolling
+   update advances to the next node.
 
 A 3-node cluster upgrade takes ~1–2 min cache-cold, ~30s cache-warm
 (after a previous upgrade on this CR has already populated the cache).
+
+### Watch progress
+
+```bash
+$ kubectl get ttdp default -o jsonpath='{.status.nodes}' | jq
+[
+  {"name":"e01cs01","currentVersion":"2.8.0","state":"Done"},
+  {"name":"e01cs02","currentVersion":"2.7.0","state":"Draining"},
+  {"name":"e01cs03","currentVersion":"2.7.0","state":"Pending"}
+]
+```
+
+### Deploy gates
+
+`controller.deployGates` in the chart's `values.yaml` is the list of
+node-label keys the controller flips off (`=false`) during a kmd
+upgrade and removes on uncordon. Sibling DaemonSets that consume
+`/dev/tenstorrent` (tt-telemetry, future workloads) must include
+`NotIn ["false"]` on the same label key in their `nodeAffinity` — the
+chart-level pattern from NVIDIA gpu-operator. Default list:
+`tenstorrent.com/deploy.tt-telemetry`. Set to `[]` to disable the
+gate-flip entirely.
 
 ### Downgrade
 

@@ -11,15 +11,25 @@ Bump `spec.version` on the `TenstorrentDriverPolicy`:
 kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.8.0"}}'
 ```
 
-Per-node sequence:
+Per-node sequence (full state machine in [driver.md](driver.md#upgrade-flow)):
 
-1. Controller re-renders the DS template with the new
+1. Controller cordons the node and flips
+   `controller.deployGates` labels (default
+   `tenstorrent.com/deploy.tt-telemetry=false`) so sibling DSes that
+   hold `/dev/tenstorrent` evict themselves.
+2. Two-pass drain: pass 1 evicts hostPath `/dev/tenstorrent` holders;
+   pass 2 (`drain.fullNode`, default on) is full `kubectl drain`
+   semantics.
+3. Controller re-renders the DS template with the new
    `TT_KMD_VERSION` env, stamps a new `template-hash` annotation.
-2. K8s rolling update: `maxUnavailable: 1` — one node at a time.
-3. New pod's entrypoint: checks `refcnt`; if 0, `rmmod tenstorrent`,
+4. K8s rolling update: `maxUnavailable: 1` — one node at a time.
+5. New pod's entrypoint: checks `refcnt`; if 0, `rmmod tenstorrent`,
    build from cache or clone + `make modules`, `insmod`.
-4. Readiness probe (`/sys/module/tenstorrent/version` matches expected)
-   becomes True; rolling update advances.
+   `upgradePolicy.forceUnload=true` SIGKILLs remaining holders via
+   `/proc/*/fd` walk before `rmmod`.
+6. Readiness probe (`/sys/module/tenstorrent/version` matches expected)
+   becomes True; controller uncordons and removes the deploy-gate
+   labels; rolling update advances.
 
 Wall-clock per node:
 
@@ -33,14 +43,17 @@ otherwise the builder clones + makes it fresh.
 
 ### Blocked by workload
 
-If a node's `refcnt > 0` when the new pod runs, the entrypoint fails
-loudly with the holder PIDs. The pod CrashLoops; the CR's
-`status.summary.failed` increments; that node stays at the old
-version. To unblock:
+The pre-upgrade drain (above) normally drops `refcnt` to 0 before the
+new builder pod runs. If a holder still survives — e.g.
+`drain.enable=false`, or a pod with `tolerations: Exists` that respawns
+on the cordoned node — the entrypoint fails loudly with the holder
+PIDs and the pod CrashLoops; the CR's `status.summary.failed`
+increments. To unblock, either:
 
-1. Drain workloads that have `/dev/tenstorrent` open.
-2. Either delete the CrashLooping pod (`kubectl delete pod ttdrv-...`)
-   to retry, or wait — pods are restarted by the kubelet automatically.
+- Set `spec.upgradePolicy.forceUnload=true` and let the next reconcile
+  SIGKILL the holders (lose in-flight workloads on that node).
+- Find + drain the holders manually, then delete the CrashLooping pod
+  (`kubectl delete pod ttdrv-...`) to retry.
 
 ## tt-smi
 
@@ -84,8 +97,9 @@ Wall-clock per node: ~40s for the Job itself plus drain time if drain
 is enabled.
 
 To re-flash the SAME version (e.g. recovery from a corrupted flash),
-set `spec.force: true`. The controller deletes the existing Complete
-Job for that `(CR, node, version)` and creates a new one.
+set `spec.flasher.forceWrite: true`. The controller deletes the
+existing Complete Job for that `(CR, node, version)` and creates a
+new one.
 
 ## The operator itself
 
@@ -148,5 +162,9 @@ existing CRs.
 | Per-CR parallelism (driver) | DS `maxUnavailable: 1` (hardcoded; one-node-at-a-time is the only sensible default for kernel modules) |
 | Per-node timeout (firmware) | `spec.upgradePolicy.flashTimeoutSeconds` |
 | Per-node drain timeout | `spec.upgradePolicy.drain.timeoutSeconds` |
+| Drain pass 2 on/off (driver) | `spec.upgradePolicy.drain.fullNode` |
+| Drain pass 2 label filter (driver) | `spec.upgradePolicy.drain.podSelectorLabel` |
+| SIGKILL device holders (driver) | `spec.upgradePolicy.forceUnload` |
+| Sibling-DS deploy gates (driver) | chart `controller.deployGates` |
 | Soft pause | `spec.paused: true` on the CR (both kinds) |
 | Hard pause (per-node) | `driver.tenstorrent.com/skip=true` or `firmware.tenstorrent.com/skip=true` label on the node |
