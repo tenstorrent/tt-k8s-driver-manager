@@ -1,0 +1,24 @@
+name: helm-docs
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install helm-docs
+        run: |
+          version=v1.14.2
+          curl -sSL -o /tmp/helm-docs.tgz \
+            "https://github.com/norwoodj/helm-docs/releases/download/${version}/helm-docs_${version#v}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/helm-docs.tgz -C /tmp helm-docs
+          sudo install -m 0755 /tmp/helm-docs /usr/local/bin/helm-docs
+      - name: Regenerate docs and diff
+        run: |
+          helm-docs --chart-search-root=charts
+          git diff --exit-code -- charts/ \
+            || (echo "::error::chart README out of date — run 'helm-docs --chart-search-root=charts' and commit"; exit 1)
