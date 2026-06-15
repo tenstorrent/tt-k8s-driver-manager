@@ -17,35 +17,57 @@
 # been cut on tt-k8s-driver-manager (the images workflow produces semver
 # image tags from git tags). During pre-release dev, override with
 # `--set <component>.image.tag=latest` or a specific sha-XXX to track main.
+#
+# The driver image is the per-node builder DaemonSet pod the controller
+# spawns. It builds tt-kmd against the host's kernel headers, caches the
+# .ko on a host volume, and insmods into the host kernel. Passed via
+# DRIVER_IMAGE env; every TenstorrentDriverPolicy uses this unless
+# overridden via spec.installer.image. pullPolicy here is reserved for
+# future propagation; per-CR pull policy is set on the CR.
+#
+# The flasher image is the per-node firmware flash Job. It bundles
+# tt-flash + tt-smi and is passed to Jobs via FLASHER_IMAGE. pullPolicy
+# is reserved for future propagation; per-CR pull policy is set on the
+# TenstorrentFirmwarePolicy CR.
+#
+# imagePullSecrets are attached to the controller + installer
+# ServiceAccounts. Pods that use either SA inherit these — including the
+# per-node DaemonSet pods the controller spawns when CRs are applied.
+# Leave empty for public images or when GHCR creds are already injected
+# via a namespace-default ServiceAccount.
 
+# -- Controller Deployment settings (image, replicas, RBAC gates, env, resources).
 controller:
   image:
+    # -- Controller image repository.
     repository: ghcr.io/tenstorrent/tt-k8s-driver-manager-controller
+    # -- Controller image tag; falls back to .Chart.AppVersion when empty.
     tag: ""
+    # -- Controller image pull policy.
     pullPolicy: IfNotPresent
+  # -- Controller Deployment replica count.
   replicas: 1
+  # -- Enable leader election on the controller manager.
   leaderElection: false
+  # -- Require nodes to carry the Tenstorrent NFD PCI label before reconciling.
   requireTenstorrentLabel: "true"
-  # Node-label keys the controller flips off (value="false") during a
-  # kmd upgrade to drain sibling DSes that hold /dev/tenstorrent. Each
-  # listed key is set to "false" on every matched node BEFORE the
-  # DaemonSet template is bumped (sibling DS's nodeAffinity stops
-  # matching → DS controller deletes the pod → FDs close → refcnt
-  # drops). The labels are REMOVED (not flipped back to "true") after
-  # the per-node builder pod becomes Ready against the new version —
-  # the chart's NotIn ["false"] semantic schedules the DS back when
-  # the label is absent.
-  #
-  # Unset (key missing entirely) → controller uses its compiled-in
-  # default (today: tenstorrent.com/deploy.tt-telemetry). An explicit
-  # empty list disables the gate-flip step entirely.
+  # -- Node-label keys the controller flips to "false" during a kmd upgrade to
+  # drain sibling DaemonSets that hold /dev/tenstorrent. Each listed key is
+  # set to "false" on every matched node BEFORE the DaemonSet template is
+  # bumped (sibling DS's nodeAffinity stops matching → DS controller deletes
+  # the pod → FDs close → refcnt drops). Labels are REMOVED (not flipped back
+  # to "true") once the new builder pod is Ready — the chart's NotIn
+  # ["false"] semantic schedules the DS back when the label is absent.
+  # Unset (key missing entirely) → controller uses its compiled-in default
+  # (today: tenstorrent.com/deploy.tt-telemetry). An explicit empty list
+  # disables the gate-flip step entirely.
   deployGates:
     - "tenstorrent.com/deploy.tt-telemetry"
-  # Extra environment variables appended to the controller's env (and
-  # propagated to spawned builder pods for HTTPS_PROXY/HTTP_PROXY/NO_PROXY
-  # — needed on clusters whose pod egress requires a proxy, since the
-  # builder git-clones tt-kmd source on cache miss).
+  # -- Extra env vars appended to the controller and propagated to spawned
+  # builder pods; escape hatch for HTTPS_PROXY/HTTP_PROXY/NO_PROXY in
+  # proxied clusters where the builder must git-clone tt-kmd.
   extraEnv: []
+  # -- Controller container resource requests/limits.
   resources:
     limits:
       cpu: 500m
@@ -54,31 +76,28 @@ controller:
       cpu: 50m
       memory: 64Mi
 
-# Image the controller spawns as the per-node DaemonSet pod. Builds
-# tt-kmd against the host's kernel headers, caches the .ko on a host
-# volume, and insmods into the host kernel. Passed via DRIVER_IMAGE
-# env; every TenstorrentDriverPolicy uses this unless overridden via
-# spec.installer.image. pullPolicy here is reserved for future
-# propagation; per-CR pull policy is set via spec.installer.imagePullPolicy.
+# -- Image the controller spawns as the per-node builder DaemonSet pod
+# (builds tt-kmd against host headers, insmods into the host kernel).
 driver:
   image:
+    # -- Builder image repository.
     repository: ghcr.io/tenstorrent/tt-k8s-driver-manager-builder
+    # -- Builder image tag; falls back to .Chart.AppVersion when empty.
     tag: ""
+    # -- Builder image pull policy (reserved; per-CR policy set on the CR).
     pullPolicy: IfNotPresent
 
-# Image the controller spawns as the per-node firmware flash Job.
-# Bundles tt-flash + tt-smi; passed to per-Job pods via FLASHER_IMAGE.
-# pullPolicy here is reserved for future propagation; per-CR pull policy
-# is set via spec.flasher.imagePullPolicy on the firmware CR.
+# -- Image the controller spawns as the per-node firmware flash Job
+# (bundles tt-flash + tt-smi, driven by TenstorrentFirmwarePolicy).
 flasher:
   image:
+    # -- Flasher image repository.
     repository: ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher
+    # -- Flasher image tag; falls back to .Chart.AppVersion when empty.
     tag: ""
+    # -- Flasher image pull policy (reserved; per-CR policy set on the CR).
     pullPolicy: IfNotPresent
 
-# Image pull secrets attached to the controller + installer
-# ServiceAccounts. Pods that use either SA inherit these — including
-# the per-node DaemonSet pods the controller spawns when CRs are
-# applied. Leave empty for public images or when GHCR creds are
-# already injected via a namespace-default ServiceAccount.
+# -- Pull secrets for the controller + installer ServiceAccounts; inherited
+# by spawned builder/flasher pods. Leave empty for public images.
 imagePullSecrets: []
