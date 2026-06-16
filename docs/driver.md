@@ -267,7 +267,10 @@ The pod still propagates `kmd-version` to the node label, so observability
 works the same as for container-managed nodes.
 
 To force a host-managed node into container mode, remove the host's DKMS
-state — see [docs/troubleshooting.md → fully clean a host](troubleshooting.md#fully-clean-a-host).
+state — see [docs/migrating-from-dkms.md](migrating-from-dkms.md) for the
+per-node vacate procedure plus cluster-side coordination, or
+[docs/troubleshooting.md → fully clean a host](troubleshooting.md#fully-clean-a-host)
+for the broader operator-side sweep.
 To do the inverse (keep operator out entirely, even from labelling), use
 the [skip label](#skip-label).
 

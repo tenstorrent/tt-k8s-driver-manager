@@ -129,6 +129,7 @@ ownership"), set `driver.tenstorrent.com/skip=true` on the node.
 | [Drivers](docs/driver.md) | `TenstorrentDriverPolicy`, upgrade flow, drain policy, deploy gates, install-mode, skip label |
 | [Firmware](docs/firmware.md) | `TenstorrentFirmwarePolicy`, drain config, force-write flag |
 | [Upgrades](docs/upgrades.md) | Rolling-update semantics for tt-kmd, tt-smi, firmware, operator itself |
+| [Migrating from DKMS](docs/migrating-from-dkms.md) | Vacate a DKMS install so the operator can take over kmd lifecycle |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures and how to read the symptoms |
 
 ## Related repos

@@ -185,11 +185,10 @@ Expected, not a bug. The builder pod detected `/var/lib/dkms/tenstorrent`
 or `/usr/src/tenstorrent-<v>/dkms.conf` and stood down. The host's
 tt-kmd stays, the operator doesn't `rmmod` or rebuild.
 
-If you want the operator to take over:
-
-1. Drain workloads (or accept downtime).
-2. Sweep the host's DKMS state — see [Fully clean a host](#fully-clean-a-host).
-3. Delete the builder pod on that node so it restarts and re-detects.
+If you want the operator to take over, follow
+[docs/migrating-from-dkms.md](migrating-from-dkms.md) — it has the
+per-node vacate script, the cluster-side cordon/drain coordination, and
+the watch-outs (both DKMS signal dirs, refcnt > 0, proxied builder).
 
 If you want to keep the host install and just stop driver-manager from
 touching the node entirely:
