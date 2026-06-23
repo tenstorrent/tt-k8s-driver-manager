@@ -472,7 +472,7 @@ func driverDaemonSetName(crName string) string {
 }
 
 func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDriverPolicy, name string) *appsv1.DaemonSet {
-	image := defaultDriverImage()
+	image := defaultToolsImage()
 	pull := corev1.PullIfNotPresent
 	if cr.Spec.Installer != nil {
 		if cr.Spec.Installer.Image != "" {
@@ -575,6 +575,9 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 						Name:            "builder",
 						Image:           image,
 						ImagePullPolicy: pull,
+						// Consolidated tools image: ENTRYPOINT is the
+						// dispatcher; first arg selects the role.
+						Args:            []string{"build"},
 						Env:             builderEnv,
 						SecurityContext: &corev1.SecurityContext{Privileged: &priv},
 						VolumeMounts: []corev1.VolumeMount{
@@ -697,16 +700,6 @@ func computeDSTemplateHash(ds *appsv1.DaemonSet) string {
 // kubelet/controller writes don't trigger a rolling restart.
 func daemonSetNeedsUpdate(existing, desired *appsv1.DaemonSet) bool {
 	return existing.Annotations[dsTemplateHashAnnotation] != desired.Annotations[dsTemplateHashAnnotation]
-}
-
-func defaultDriverImage() string {
-	if v := envOrDefault("DRIVER_IMAGE", ""); v != "" {
-		return v
-	}
-	// The chart always wires DRIVER_IMAGE via env. This fallback is a
-	// sane-default for ad-hoc `go run` / envtest paths only — match the
-	// builder image since the nsenter installer no longer exists.
-	return "ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:dev"
 }
 
 func (r *DriverPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {

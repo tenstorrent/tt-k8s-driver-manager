@@ -57,19 +57,19 @@ increments. To unblock, either:
 
 ## tt-smi
 
-tt-smi version is baked into the builder image at image-build time
+tt-smi version is baked into the tools image at image-build time
 (`ARG TT_SMI_VERSION`). To upgrade across the fleet, bump the chart's
-`driver.image.tag` to a builder image tag built with the new tt-smi
+`tools.image.tag` to a tools image tag built with the new tt-smi
 version.
 
 ```bash
 helm -n tt-k8s-driver-manager-system upgrade tt-k8s-driver-manager \
   oci://ghcr.io/tenstorrent/helm-charts/tt-k8s-driver-manager \
   --reuse-values \
-  --set driver.image.tag=sha-newer
+  --set tools.image.tag=sha-newer
 ```
 
-(Or set `driver.image.repository` too if you're pulling from a mirror.)
+(Or set `tools.image.repository` too if you're pulling from a mirror.)
 
 Per-node sequence:
 

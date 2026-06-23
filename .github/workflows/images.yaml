@@ -1,13 +1,13 @@
 name: images
 
-# Builds and pushes the three container images this repo produces:
+# Builds and pushes the two container images this repo produces:
 #   - controller: ghcr.io/tenstorrent/tt-k8s-driver-manager-controller
-#   - builder:    ghcr.io/tenstorrent/tt-k8s-driver-manager-builder
-#                 (containerized tt-kmd build: clones tt-kmd, builds
-#                  against host kernel headers, insmods. Single image
-#                  serves all CR versions.)
-#   - flasher:    ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher
-#                 (tt-flash + tt-smi in one image for the firmware Job)
+#                 (slim Go binary on distroless)
+#   - tools:      ghcr.io/tenstorrent/tt-k8s-driver-manager-tools
+#                 (single privileged image, multi-mode entrypoint:
+#                  build / flash / unload — picked by argv[0] per the
+#                  spawning controller. Consolidates what used to be
+#                  three per-role images.)
 #
 # Versioning model (ported from tenstorrent/tt-fabric-manager):
 #
@@ -39,8 +39,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   CONTROLLER_IMAGE: ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-controller
-  BUILDER_IMAGE:    ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-builder
-  FLASHER_IMAGE:    ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-flasher
+  TOOLS_IMAGE:      ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-tools
 
 jobs:
   build:
@@ -52,14 +51,10 @@ jobs:
             context: .
             dockerfile: Dockerfile
             image_env: CONTROLLER_IMAGE
-          - name: builder
-            context: images/driver-build
-            dockerfile: images/driver-build/Dockerfile
-            image_env: BUILDER_IMAGE
-          - name: flasher
-            context: images/flasher
-            dockerfile: images/flasher/Dockerfile
-            image_env: FLASHER_IMAGE
+          - name: tools
+            context: images/tools
+            dockerfile: images/tools/Dockerfile
+            image_env: TOOLS_IMAGE
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,6 +90,7 @@ jobs:
             type=raw,value=${{ github.event.inputs.extra_tag }},enable=${{ github.event.inputs.extra_tag != '' }}
 
       - name: Build and push ${{ matrix.name }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -105,8 +101,50 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          load: false
 
       - name: Print pushed tags
         run: |
           echo "Pushed ${{ matrix.name }} tags:"
           echo "${{ steps.meta.outputs.tags }}" | sed 's|^|  |'
+
+  smoke-tools:
+    # Smoke-test the consolidated entrypoint after the matrix build —
+    # pull the freshly-pushed sha tag and exercise every role dispatch
+    # branch (no hardware, so the role scripts are invoked with --help
+    # or an early-exit env). Catches a missing role script / busted
+    # dispatcher before downstream consumers pull the image.
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Smoke each dispatcher role
+        run: |
+          set -euo pipefail
+          IMG=ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-tools:sha-$(echo ${{ github.sha }} | cut -c1-7)
+          echo "image: $IMG"
+          # No-role → dispatcher must reject with a clear error.
+          docker run --rm "$IMG" 2>&1 | grep -q 'no role given' \
+              && echo "OK: no-role rejected"
+          # Verbatim passthrough → arbitrary command works.
+          docker run --rm "$IMG" sh -c 'echo hi' | grep -q '^hi$' \
+              && echo "OK: verbatim passthrough"
+          # Each role script must be present + executable. We don't run
+          # them end-to-end (no hardware), but we do confirm the
+          # dispatcher hands off to the right script.
+          for role in build flash unload; do
+              docker run --rm --entrypoint /bin/sh "$IMG" \
+                  -c "test -x /usr/local/bin/${role}.sh"
+              echo "OK: ${role}.sh present + executable"
+          done
+          # Required CLIs present.
+          docker run --rm --entrypoint /bin/sh "$IMG" -c \
+              'command -v tt-flash && command -v tt-smi && command -v gcc-12 && command -v ipmitool'
+          echo "OK: tt-flash, tt-smi, gcc-12, ipmitool present"

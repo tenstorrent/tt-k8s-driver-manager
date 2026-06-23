@@ -480,7 +480,7 @@ func (r *FirmwarePolicyReconciler) countInFlightJobs(ctx context.Context, cr *fi
 // denormalized labels/annotations the operator-guide tells humans to
 // grep. Idempotent on AlreadyExists.
 func (r *FirmwarePolicyReconciler) spawnFlashJob(ctx context.Context, cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, node *corev1.Node, ns *firmwarev1alpha1.NodeStatus) (bool, error) {
-	job := buildFlashJob(cr, node.Name, defaultFlasherImageFromEnv())
+	job := buildFlashJob(cr, node.Name, defaultToolsImage())
 	setOwnerRef(job, cr)
 	if err := r.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {

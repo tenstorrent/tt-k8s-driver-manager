@@ -86,9 +86,9 @@ Linux version 6.x.0-... (Ubuntu gcc-13 ...)
 
 Two fixes:
 
-1. **Use a builder image built with the matching gcc.** Bump
-   `gcc-12` → `gcc-N` in `images/driver-build/Dockerfile`, rebuild,
-   push, point `driver.image` at the new tag.
+1. **Use a tools image built with the matching gcc.** Bump
+   `gcc-12` → `gcc-N` in `images/tools/Dockerfile`, rebuild,
+   push, point `tools.image` at the new tag.
 2. **Use a host with a different kernel.** Match the kernel against
    the builder image — `apt install linux-image-generic-hwe-22.04`
    pulls a jammy/gcc-12 kernel.
@@ -210,8 +210,8 @@ GitHub releases, which ships one flavor per Ubuntu release
 bakes in the flavor matching its `ARG UBUNTU_VERSION`; if that's newer
 than the host OS, the binary needs glibc symbols the host doesn't have.
 
-Fix: set `ARG UBUNTU_VERSION` in `images/driver-build/Dockerfile` to
-the hosts' Ubuntu release and push. Mixed-OS fleets need one builder
+Fix: set `ARG UBUNTU_VERSION` in `images/tools/Dockerfile` to
+the hosts' Ubuntu release and push. Mixed-OS fleets need one tools
 image (and so one `TenstorrentDriverPolicy` with a matching
 `nodeSelector`) per Ubuntu release.
 

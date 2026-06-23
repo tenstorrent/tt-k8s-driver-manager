@@ -19,13 +19,16 @@ func requireTenstorrentLabel() bool {
 	return os.Getenv("REQUIRE_TT_PCI_LABEL") != "false"
 }
 
-// defaultFlasherImageFromEnv lets the chart override the flasher image
-// without rebuilding the controller binary.
-func defaultFlasherImageFromEnv() string {
-	if v := os.Getenv("FLASHER_IMAGE"); v != "" {
+// defaultToolsImage returns the consolidated per-node image the
+// controller passes to spawned builder DaemonSet pods + firmware-flash
+// Jobs + unload Jobs. Override path is TOOLS_IMAGE env (wired by the
+// chart from .Values.tools.image). The compile-time fallback below is
+// the sane-default for ad-hoc `go run` / envtest paths only.
+func defaultToolsImage() string {
+	if v := os.Getenv("TOOLS_IMAGE"); v != "" {
 		return v
 	}
-	return defaultFlasherImage
+	return "ghcr.io/tenstorrent/tt-k8s-driver-manager-tools:dev"
 }
 
 func envOrDefault(name, def string) string {

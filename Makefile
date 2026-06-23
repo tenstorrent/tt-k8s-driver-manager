@@ -2,8 +2,7 @@
 
 CONTROLLER_GEN  ?= $(shell go env GOPATH)/bin/controller-gen
 CONTROLLER_IMG  ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-controller:dev
-BUILDER_IMG     ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:dev
-FLASHER_IMG     ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher:dev
+TOOLS_IMG       ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-tools:dev
 PLATFORMS       ?= linux/amd64
 
 .PHONY: all
@@ -44,13 +43,9 @@ vet:
 controller-image:
 	docker build -t $(CONTROLLER_IMG) .
 
-.PHONY: builder-image
-builder-image:
-	docker build -t $(BUILDER_IMG) -f images/driver-build/Dockerfile images/driver-build
-
-.PHONY: flasher-image
-flasher-image:
-	docker build -t $(FLASHER_IMG) images/flasher
+.PHONY: tools-image
+tools-image:
+	docker build -t $(TOOLS_IMG) images/tools
 
 ##@ Helm
 
@@ -63,8 +58,7 @@ helm-install:
 	helm upgrade --install tt-k8s-driver-manager charts/tt-k8s-driver-manager \
 		--namespace tt-k8s-driver-manager-system --create-namespace \
 		--set controller.image=$(CONTROLLER_IMG) \
-		--set driver.image=$(BUILDER_IMG) \
-		--set flasher.image=$(FLASHER_IMG)
+		--set tools.image=$(TOOLS_IMG)
 
 ##@ Plugins
 
