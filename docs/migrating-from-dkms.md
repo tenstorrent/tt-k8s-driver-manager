@@ -169,7 +169,7 @@ metadata:
   name: migration-test
 spec:
   version: "2.8.0"                      # whatever DKMS was pinning, or the version you want to land on
-  nodeSelector:
+  nodeAffinity:
     matchLabels:
       kubernetes.io/hostname: e01cs01   # one node only for the first cut
   paused: true                          # flip to false after the vacate
@@ -183,7 +183,7 @@ spec:
 kubectl patch ttdp migration-test --type merge -p '{"spec":{"paused":false}}'
 ```
 
-Once this single-node migration is clean, widen `nodeSelector` (or apply
+Once this single-node migration is clean, widen `nodeAffinity` (or apply
 a fleet-scoped CR like the one in [driver.md → Whole-fleet install](driver.md#whole-fleet-install))
 and migrate the rest of the fleet one node at a time.
 

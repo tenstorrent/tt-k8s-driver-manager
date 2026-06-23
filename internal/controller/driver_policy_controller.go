@@ -239,7 +239,8 @@ func podEnv(p *corev1.Pod, name string) string {
 }
 
 func (r *DriverPolicyReconciler) countMatchedNodes(ctx context.Context, cr *driverv1alpha1.TenstorrentDriverPolicy) (int32, error) {
-	sel, err := metav1.LabelSelectorAsSelector(&cr.Spec.NodeSelector)
+	effSel := cr.Spec.EffectiveNodeAffinity()
+	sel, err := metav1.LabelSelectorAsSelector(&effSel)
 	if err != nil {
 		return 0, err
 	}
@@ -497,14 +498,14 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 		"driver.tenstorrent.com/cr":   cr.Name,
 	}
 
-	// Merge spec.nodeSelector with the NFD-presence requirement and a
+	// Merge spec.nodeAffinity with the NFD-presence requirement and a
 	// DoesNotExist gate on LabelDriverSkip. Adding the skip label to a
 	// running node makes the existing installer pod no longer match
 	// nodeAffinity, so kubelet evicts it — the skip takes effect
 	// immediately, not just on the next scheduling decision.
 	nodeSelectorTerms := []corev1.NodeSelectorTerm{{
 		MatchExpressions: append(
-			labelSelectorToExpressions(cr.Spec.NodeSelector),
+			labelSelectorToExpressions(cr.Spec.EffectiveNodeAffinity()),
 			corev1.NodeSelectorRequirement{
 				Key: LabelTenstorrentPresent, Operator: corev1.NodeSelectorOpIn, Values: []string{"true"},
 			},

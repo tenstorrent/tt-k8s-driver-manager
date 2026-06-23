@@ -13,7 +13,7 @@ metadata:
   name: default
 spec:
   version: "19.8.0"
-  nodeSelector: {}
+  nodeAffinity: {}
 ```
 
 What happens:
@@ -41,7 +41,7 @@ What happens:
 | `version` | required | Firmware bundle version. `^[0-9]+\.[0-9]+\.[0-9]+$`. |
 | `readbackVersion` | `<version>.0` | What `tt-smi -s` should report post-flash. Override if a bundle's filename version doesn't match its readback. |
 | `bundleURL` | github tt-system-firmware release | Pin to a specific URL (mirror, internal repo, signed copy). |
-| `nodeSelector` | required | Same shape as the driver CR. |
+| `nodeAffinity` | required | Same shape as the driver CR. The v1alpha1 alias `nodeSelector` accepts the same shape and is deprecated. |
 | `paused` | `false` | Soft stop. In-flight Jobs not interrupted; new ones don't start. |
 | `upgradePolicy.maxParallel` | `1` | Nodes flashing simultaneously across this CR. Crank up only if a bad fw bundle can't brick the fleet faster than you can `paused: true`. |
 | `upgradePolicy.haltOnFailure` | `true` | Halt the rollout the moment any node hits `Failed`. Set `false` to keep flashing the rest of the matched nodes. |
@@ -64,7 +64,7 @@ kind: TenstorrentFirmwarePolicy
 metadata: { name: fleet }
 spec:
   version: "19.8.0"
-  nodeSelector: {}
+  nodeAffinity: {}
   upgradePolicy:
     maxParallel: 1     # one node at a time — bad fw shouldn't lose the cluster
     drain:

@@ -13,7 +13,7 @@ metadata:
 spec:
   # Latest stable from tenstorrent/tt-system-firmware releases (as of 2026-05-14).
   version: "19.9.0"
-  nodeSelector: {}
+  nodeAffinity: {}
   upgradePolicy:
     maxParallel: 1
     flashTimeoutSeconds: 900
