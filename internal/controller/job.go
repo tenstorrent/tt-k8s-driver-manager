@@ -14,9 +14,6 @@ import (
 	firmwarev1alpha1 "github.com/tenstorrent/tt-k8s-driver-manager/api/firmware/v1alpha1"
 )
 
-// defaultFlasherImage is overridable via the FLASHER_IMAGE env var on the controller.
-const defaultFlasherImage = "ghcr.io/tenstorrent/tt-fw-flasher:dev"
-
 // jobName returns a stable, DNS-safe Job name for a (CR, node, version) triple.
 // Length-capped at 63 chars; suffix is a short hash for uniqueness when the
 // readable prefix gets truncated.
@@ -138,6 +135,9 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 							Name:            "flash",
 							Image:           image,
 							ImagePullPolicy: pullPolicy,
+							// Consolidated tools image: ENTRYPOINT is the
+							// dispatcher; first arg selects the role.
+							Args: []string{"flash"},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: &privileged,
 								Capabilities: &corev1.Capabilities{

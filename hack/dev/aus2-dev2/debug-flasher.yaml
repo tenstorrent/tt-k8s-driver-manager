@@ -18,7 +18,7 @@ spec:
         - operator: Exists
       containers:
         - name: probe
-          image: ghcr.io/tenstorrent/tt-fw-flasher:sha-9cd0ebc
+          image: ghcr.io/tenstorrent/tt-k8s-driver-manager-tools:sha-9cd0ebc
           imagePullPolicy: IfNotPresent
           # Bypass the flasher entrypoint — run diagnostic commands directly.
           command:

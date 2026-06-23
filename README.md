@@ -158,8 +158,8 @@ internal/controller/
   driver_policy_controller.go   reconcile loop for driver installs + upgrades
   firmware_policy_controller.go reconcile loop for firmware flash jobs
   job.go / labels.go / env.go   shared helpers
-images/driver-build/      Dockerfile + entrypoint for the privileged builder pod
-images/flasher/           Dockerfile for the tt-flash job pod
+images/tools/             Dockerfile + multi-mode entrypoint for the privileged
+                          per-node image (build / flash / unload)
 charts/tt-k8s-driver-manager/  Helm chart
 config/crd/               generated CRD manifests
 config/rbac/              generated RBAC manifests
@@ -181,8 +181,7 @@ helm template charts/tt-k8s-driver-manager   # render chart locally
 
 ```bash
 make controller-image    # ghcr.io/.../tt-k8s-driver-manager-controller:dev
-make builder-image       # ghcr.io/.../tt-k8s-driver-manager-builder:dev
-make flasher-image       # ghcr.io/.../tt-k8s-driver-manager-flasher:dev
+make tools-image         # ghcr.io/.../tt-k8s-driver-manager-tools:dev
 make helm-install        # deploy :dev images to the current kube context
 ```
 
@@ -196,6 +195,6 @@ make install-plugins     # kubectl-tt-driver + kubectl-tt-fw → ~/.local/bin
 
 1. `internal/controller/driver_policy_controller.go` — core reconcile loop for driver installs + upgrades.
 2. `internal/controller/firmware_policy_controller.go` — same pattern for firmware flash jobs.
-3. `images/driver-build/entrypoint.sh` — what runs in the privileged pod: kernel build + insmod.
+3. `images/tools/build.sh` — what runs in the privileged builder pod: kernel build + insmod. The sibling `flash.sh` and `unload.sh` are the other roles dispatched by `tools-entrypoint.sh`.
 
 API types (spec fields, status conditions): `api/driver/v1alpha1/` and `api/firmware/v1alpha1/`.

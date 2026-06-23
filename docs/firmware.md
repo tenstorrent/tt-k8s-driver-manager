@@ -21,7 +21,8 @@ What happens:
 1. Controller walks each matched node through a state machine:
    `Pending → (Cordoning → Draining)? → Flashing → Uncordoning → Done`.
 2. For each node, a Job is created in the operator namespace using the
-   flasher image (`ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher`).
+   tools image (`ghcr.io/tenstorrent/tt-k8s-driver-manager-tools`) with
+   `flash` as the first arg.
    The Job:
    - Reads pre-flash version via `tt-smi -s`.
    - Downloads `fw_pack-<version>.fwbundle` from
@@ -49,7 +50,7 @@ What happens:
 | `upgradePolicy.drain.enable` | `true` | Cordon+drain pods that hold `/dev/tenstorrent` before flashing. See [Drain semantics](#drain-semantics). |
 | `upgradePolicy.drain.timeoutSeconds` | `600` | Per-node drain timeout. After this, node moves to `Failed` with the blocking pod list. |
 | `upgradePolicy.drain.force` | `false` | Delete pods that have no controller (bare Pods) instead of evicting. |
-| `flasher.image` | chart's `flasher.image` | Per-CR override of the flasher image. |
+| `flasher.image` | chart's `tools.image` | Per-CR override of the per-node tools image (the flasher Job invokes it with `flash` as the first arg). |
 | `flasher.imagePullPolicy` | `IfNotPresent` | Override for the above. |
 | `flasher.forceWrite` | `false` | Bypass the "current readback already matches target" short-circuit and pass `--force` to tt-flash. Use for re-flashing the same version, downgrades, or suspected silent ROM corruption. |
 | `flasher.continueOnReadbackFailure` | `false` | Continue with the flash even if `tt-smi` pre-flash readback fails (chip wedged / driver detached). Independent of `forceWrite`: a chip that subsequently recovers and reports the target version will still skip the flash unless `forceWrite` is also set. |

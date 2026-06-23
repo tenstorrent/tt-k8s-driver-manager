@@ -53,7 +53,7 @@ What happens:
 | `upgradePolicy.drain.deleteEmptyDir` | `true` | Pass 2 evicts pods with `emptyDir` volumes (kubectl drain's `--delete-emptydir-data`). |
 | `upgradePolicy.drain.timeoutSeconds` | `600` | Per-node drain deadline. |
 | `upgradePolicy.forceUnload` | `false` | Last resort: if `refcnt>0` after drain, the builder pod walks `/proc/*/fd` and SIGKILLs every process holding `/dev/tenstorrent` before `rmmod`. Off by default — prefer draining over killing workloads. |
-| `installer.image` | chart's `driver.image` | Per-CR override of the builder image. Useful for canary-ing a new builder. |
+| `installer.image` | chart's `tools.image` | Per-CR override of the builder image. Useful for canary-ing a new builder. |
 | `installer.imagePullPolicy` | `IfNotPresent` | Override for the above. Set to `Always` when iterating on a moving image tag. |
 
 ## CR examples
@@ -114,7 +114,7 @@ kubectl patch ttdp default --type merge -p '{"spec":{"paused":false}}'
 spec:
   version: "2.8.0"
   installer:
-    image: ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:sha-abc1234
+    image: ghcr.io/tenstorrent/tt-k8s-driver-manager-tools:sha-abc1234
     imagePullPolicy: Always
 ```
 
