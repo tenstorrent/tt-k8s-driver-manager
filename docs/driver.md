@@ -55,6 +55,7 @@ What happens:
 | `upgradePolicy.forceUnload` | `false` | Last resort: if `refcnt>0` after drain, the builder pod walks `/proc/*/fd` and SIGKILLs every process holding `/dev/tenstorrent` before `rmmod`. Off by default — prefer draining over killing workloads. |
 | `installer.image` | chart's `driver.image` | Per-CR override of the builder image. Useful for canary-ing a new builder. |
 | `installer.imagePullPolicy` | `IfNotPresent` | Override for the above. Set to `Always` when iterating on a moving image tag. |
+| `unmanage` | `false` | Vacate every in-scope node for an external KMD manager (DKMS) to take over. Drains `/dev/tenstorrent` holders, runs a per-node unload Job that `rmmod`s tt-kmd and removes operator-built `.ko` files, drops the `install-mode=container` label, tears down the DaemonSet, and stays out of the way. Strict failure mode: one failed unload halts the batch (per-node `state=UnloadFailed`, node stays cordoned for operator intervention). Reversible — flip back to `false` to resume normal reconcile. See [migrating-from-dkms → Going back to DKMS](migrating-from-dkms.md#going-back-to-dkms). |
 
 ## CR examples
 

@@ -36,6 +36,25 @@ type TenstorrentDriverPolicySpec struct {
 	// iteration on the install.sh entrypoint.
 	// +optional
 	Installer *InstallerOverride `json:"installer,omitempty"`
+
+	// Unmanage, when true, asks the controller to vacate every in-scope
+	// node so an external manager (typically DKMS via tt-ansible) can take
+	// over the host's tt-kmd. Per node, the controller drains
+	// /dev/tenstorrent holders, spawns a one-shot unload Job that rmmods
+	// tt-kmd and deletes the operator-built .ko, then drops the
+	// driver.tenstorrent.com/install-mode=container label. Once every
+	// matched node is Unmanaged the DaemonSet is torn down and the
+	// controller stays out of the way regardless of host DKMS state.
+	//
+	// Strict failure mode: if any node's unload Job fails (e.g. refcnt > 0
+	// after drain), the controller halts and surfaces UnloadFailed
+	// per-node. Operator must fix the stuck node before the rest proceed.
+	//
+	// Reversible: flipping back to false resumes normal reconcile —
+	// host-managed signals take precedence (the builder pod stands down)
+	// or, absent those, the operator re-installs from container.
+	// +optional
+	Unmanage bool `json:"unmanage,omitempty"`
 }
 
 // UpgradePolicy controls the controller's per-node kmd-upgrade behavior.
@@ -126,6 +145,14 @@ type TenstorrentDriverPolicyStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// Phase is a coarse top-level state — easy to grep with kubectl. Today
+	// only Unmanaged is set explicitly (when every in-scope node has been
+	// vacated for external KMD management); the empty/default value means
+	// the controller is reconciling normally, look at .status.conditions
+	// for finer detail.
+	// +optional
+	Phase DriverPolicyPhase `json:"phase,omitempty"`
+
 	// DesiredVersion mirrors spec.version for at-a-glance status reads.
 	// +optional
 	DesiredVersion string `json:"desiredVersion,omitempty"`
@@ -193,6 +220,14 @@ type DriverNodeStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 
+	// Reason is a machine-readable tag for the current State — short,
+	// stable, suitable for alert-rule matching (e.g. "Unmanaged",
+	// "UnloadFailed"). Empty when no specific reason applies. Shape
+	// matches the sibling status-reason PR; small overlap risk is
+	// resolved at merge time.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
 	// LastTransitionTime is when the state last changed.
 	// +optional
 	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
@@ -208,17 +243,41 @@ type DriverNodeStatus struct {
 // spec.upgradePolicy.drain.enable is true; otherwise the controller goes
 // straight from Pending → Upgrading → Done.
 //
-// +kubebuilder:validation:Enum=Pending;Cordoning;Draining;Upgrading;Uncordoning;Done;Failed
+// When spec.unmanage=true a separate flow runs:
+//
+//	Pending → Cordoning → Draining → Unloading → Unmanaged
+//	                                          ↘ UnloadFailed
+//
+// Unmanaged is terminal-stable (the controller stays out of the way of
+// the node); UnloadFailed is terminal-bad (operator must intervene).
+//
+// +kubebuilder:validation:Enum=Pending;Cordoning;Draining;Upgrading;Uncordoning;Done;Failed;Unloading;Unmanaged;UnloadFailed
 type DriverNodeState string
 
 const (
-	DriverNodeStatePending     DriverNodeState = "Pending"
-	DriverNodeStateCordoning   DriverNodeState = "Cordoning"
-	DriverNodeStateDraining    DriverNodeState = "Draining"
-	DriverNodeStateUpgrading   DriverNodeState = "Upgrading"
-	DriverNodeStateUncordoning DriverNodeState = "Uncordoning"
-	DriverNodeStateDone        DriverNodeState = "Done"
-	DriverNodeStateFailed      DriverNodeState = "Failed"
+	DriverNodeStatePending      DriverNodeState = "Pending"
+	DriverNodeStateCordoning    DriverNodeState = "Cordoning"
+	DriverNodeStateDraining     DriverNodeState = "Draining"
+	DriverNodeStateUpgrading    DriverNodeState = "Upgrading"
+	DriverNodeStateUncordoning  DriverNodeState = "Uncordoning"
+	DriverNodeStateDone         DriverNodeState = "Done"
+	DriverNodeStateFailed       DriverNodeState = "Failed"
+	DriverNodeStateUnloading    DriverNodeState = "Unloading"
+	DriverNodeStateUnmanaged    DriverNodeState = "Unmanaged"
+	DriverNodeStateUnloadFailed DriverNodeState = "UnloadFailed"
+)
+
+// DriverPolicyPhase is the coarse top-level state. Today only "Unmanaged"
+// is set explicitly; empty is the implicit default ("controller is
+// reconciling normally"). No enum validation — future phases may be
+// added without bumping the API version.
+type DriverPolicyPhase string
+
+const (
+	// DriverPolicyPhaseUnmanaged is set when every in-scope node has been
+	// vacated via spec.unmanage=true. The controller stays out of the way
+	// of those nodes regardless of DKMS-signal state.
+	DriverPolicyPhaseUnmanaged DriverPolicyPhase = "Unmanaged"
 )
 
 // +kubebuilder:object:root=true
