@@ -1,7 +1,7 @@
 name: Release Helm Chart
 
 # Publishes the tt-k8s-driver-manager chart to
-# oci://ghcr.io/tenstorrent/helm-charts so tt-operator can pick it up as
+# oci://ghcr.io/tenstorrent/helm so tt-operator can pick it up as
 # a subchart dependency.
 #
 # Versioning model (ported from tenstorrent/tt-fabric-manager):
@@ -77,4 +77,4 @@ jobs:
           helm package charts/tt-k8s-driver-manager --destination /tmp/helm-packages
           helm push \
             /tmp/helm-packages/tt-k8s-driver-manager-${{ steps.version.outputs.version }}.tgz \
-            oci://ghcr.io/${{ github.repository_owner }}/helm-charts
+            oci://ghcr.io/${{ github.repository_owner }}/helm

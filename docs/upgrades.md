@@ -64,7 +64,7 @@ version.
 
 ```bash
 helm -n tt-k8s-driver-manager-system upgrade tt-k8s-driver-manager \
-  oci://ghcr.io/tenstorrent/helm-charts/tt-k8s-driver-manager \
+  oci://ghcr.io/tenstorrent/helm/tt-k8s-driver-manager \
   --reuse-values \
   --set driver.image.tag=sha-newer
 ```
@@ -107,7 +107,7 @@ Standard Helm upgrade:
 
 ```bash
 helm -n tt-k8s-driver-manager-system upgrade tt-k8s-driver-manager \
-  oci://ghcr.io/tenstorrent/helm-charts/tt-k8s-driver-manager \
+  oci://ghcr.io/tenstorrent/helm/tt-k8s-driver-manager \
   --version 0.2.0   # the chart version, not the tt-kmd version
 ```
 
