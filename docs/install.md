@@ -32,7 +32,7 @@ Per-cluster:
 
 ```bash
 helm install tt-k8s-driver-manager \
-  oci://ghcr.io/tenstorrent/helm-charts/tt-k8s-driver-manager \
+  oci://ghcr.io/tenstorrent/helm/tt-k8s-driver-manager \
   --namespace tt-k8s-driver-manager-system --create-namespace
 ```
 
