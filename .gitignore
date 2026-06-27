@@ -1,2 +1,7 @@
 bin/
 *.tgz
+
+# docs (Sphinx) build artifacts
+docs/_build/
+docs/_generated/
+docs/output/

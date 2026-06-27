@@ -252,7 +252,7 @@ driver.tenstorrent.com/skip=true`.
 - [troubleshooting.md → Fully clean a host](troubleshooting.md#fully-clean-a-host)
   — a broader sweep that also clears operator-side state (cache,
   tt-smi, etc.); the vacate script above is the DKMS-only subset.
-- [`controller.extraEnv`](../charts/tt-k8s-driver-manager/README.md) —
+- [`controller.extraEnv`](configuration.md) —
   proxy env propagation to spawned builder pods (PR
   [#31](https://github.com/tenstorrent/tt-k8s-driver-manager/pull/31)).
 - [tt-operator integration test](https://github.com/tenstorrent/tt-operator/blob/main/.github/workflows/integration-rke2.yaml)
