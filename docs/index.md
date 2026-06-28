@@ -13,7 +13,6 @@ upgrades, migrating from a DKMS-managed driver, and troubleshooting.
 
 install
 driver
-firmware
 upgrades
 migrating-from-dkms
 troubleshooting
