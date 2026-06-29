@@ -1,7 +1,3 @@
----
-orphan: true
----
-
 # Firmware management
 
 The firmware controller flashes Tenstorrent device firmware via per-node
