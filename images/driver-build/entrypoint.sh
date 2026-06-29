@@ -95,11 +95,23 @@ install_udev_rule() {
         echo "WARN: /host/etc/udev/rules.d not mounted; skipping udev rule install"
         return 0
     fi
+    # Cache miss on the no-build path (module already loaded matches
+    # TT_KMD_VERSION) — pull the rule directly from the matching tt-kmd
+    # tag so cache-hit-without-rebuild nodes still land the rule.
+    if [ ! -f "${UDEV_CACHE_PATH}" ]; then
+        mkdir -p "${CACHE_DIR}"
+        if curl -fsSL \
+            "https://raw.githubusercontent.com/tenstorrent/tt-kmd/ttkmd-${EXPECTED}/${UDEV_SRC_NAME}" \
+            -o "${UDEV_CACHE_PATH}.tmp"; then
+            mv "${UDEV_CACHE_PATH}.tmp" "${UDEV_CACHE_PATH}"
+        else
+            rm -f "${UDEV_CACHE_PATH}.tmp"
+            echo "WARN: fetch of ${UDEV_SRC_NAME} for tt-kmd ${EXPECTED} failed; skipping rule install"
+        fi
+    fi
     if [ -f "${UDEV_CACHE_PATH}" ]; then
         install -m 0644 "${UDEV_CACHE_PATH}" "${UDEV_HOST_PATH}"
         echo "installed udev rule at host:${UDEV_HOST_PATH#/host}"
-    else
-        echo "WARN: ${UDEV_CACHE_PATH} not in cache; skipping rule install"
     fi
     if [ -d /host/dev/tenstorrent ]; then
         for dev in /host/dev/tenstorrent/[0-9]*; do
