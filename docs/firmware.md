@@ -29,7 +29,7 @@ What happens:
    - Runs `tt-flash --no-color flash <bundle>` (with `--force` if
      `spec.flasher.forceWrite=true`).
    - Asserts post-flash readback equals `spec.readbackVersion` (default
-     `<version>.0` to match tt-ansible's convention).
+     `<version>.0` to match the firmware bundle's readback format).
 3. Job's exit code is the controller's signal — no separate readback
    step in the reconcile loop. A non-zero exit moves the node to
    `Failed` with the Job's last log lines surfaced in CR status.
@@ -164,10 +164,10 @@ default   19.9.0    3         2          1            0        3m
 
 $ kubectl get ttfwp default -o jsonpath='{.status.nodes}' | jq
 [
-  {"name":"e01cs01","currentVersion":"19.9.0.0","state":"Done"},
-  {"name":"e01cs02","currentVersion":"19.9.0.0","state":"Done"},
-  {"name":"e01cs03","currentVersion":"19.8.0.0","state":"Flashing",
-   "lastFlashJob":"ttfwp-default-e01cs03-19-9-0-abc1234"}
+  {"name":"node-1","currentVersion":"19.9.0.0","state":"Done"},
+  {"name":"node-2","currentVersion":"19.9.0.0","state":"Done"},
+  {"name":"node-3","currentVersion":"19.8.0.0","state":"Flashing",
+   "lastFlashJob":"ttfwp-default-node-3-19-9-0-abc1234"}
 ]
 ```
 
@@ -176,11 +176,11 @@ $ kubectl get ttfwp default -o jsonpath='{.status.nodes}' | jq
 ```bash
 $ kubectl -n tt-operator-system get jobs -l firmware.tenstorrent.com/cr=default
 NAME                                       STATUS    COMPLETIONS   DURATION
-ttfwp-default-e01cs01-19-9-0-abc1234       Complete  1/1           34s
-ttfwp-default-e01cs02-19-9-0-abc1234       Complete  1/1           36s
-ttfwp-default-e01cs03-19-9-0-abc1234       Running   0/1           18s
+ttfwp-default-node-1-19-9-0-abc1234       Complete  1/1           34s
+ttfwp-default-node-2-19-9-0-abc1234       Complete  1/1           36s
+ttfwp-default-node-3-19-9-0-abc1234       Running   0/1           18s
 
-$ kubectl -n tt-operator-system logs job/ttfwp-default-e01cs03-19-9-0-abc1234
+$ kubectl -n tt-operator-system logs job/ttfwp-default-node-3-19-9-0-abc1234
 [flasher] pre-flash: tt-smi -s
 [flasher] pre-flash versions: 19.8.0.0 19.8.0.0 19.8.0.0 ...
 [flasher] flash: tt-flash --no-color flash --fw-tar /work/bundle.fwbundle
@@ -216,9 +216,9 @@ kubectl tt fw logs <crname>  # tail logs from in-flight Jobs
 - Galaxy / TG out-of-band firmware (the flasher only does PCIe in-band).
 - Tensix harvesting bundle regeneration.
 - LLMBox `tt-topo` post-flash mesh config.
-- Cluster-wide reservation via `tt-orchestration` Allocation CR (when
-  running alongside CI / dev that also consumes nodes — coordinate
-  out-of-band today).
+- Cluster-wide reservation coordination with an external workload
+  scheduler (when running alongside CI / dev that also consumes nodes
+  — coordinate out-of-band today).
 
 See `docs/firmware-operator-design.md` (deferred) for what each of
 these will look like.

@@ -1,8 +1,9 @@
 # Migrating from DKMS-managed to operator-managed tt-kmd
 
-Most production Tenstorrent clusters today install `tt-kmd` per-host via
-DKMS (typically through `tt-ansible`'s `tt_kmd` role). When driver-manager
-lands on those nodes it detects the DKMS state and stays out of the way —
+Many production Tenstorrent clusters today install `tt-kmd` per-host via
+DKMS (typically through a host-side config-management tool). When
+driver-manager lands on those nodes it detects the DKMS state and stays
+out of the way —
 the node is labelled `driver.tenstorrent.com/install-mode=host` and the
 builder DaemonSet idles. This guide is for cluster operators who want to
 switch a fleet (or one node at a time) from that host-managed mode to
@@ -36,7 +37,7 @@ label:
 
 | Mode | Label | Who owns kmd | When it's set |
 |---|---|---|---|
-| **Host-managed** | `driver.tenstorrent.com/install-mode=host` | Sysadmin via DKMS (apt / `tt-ansible` / manual `dkms install`) | Builder pod sees DKMS signals on the host and idles. |
+| **Host-managed** | `driver.tenstorrent.com/install-mode=host` | Sysadmin via DKMS (apt / config-management tool / manual `dkms install`) | Builder pod sees DKMS signals on the host and idles. |
 | **Container-managed** | `driver.tenstorrent.com/install-mode=container` | Operator: builder pod compiles tt-kmd from source, `insmod`s, manages version per the CR | Builder pod sees no DKMS signals, falls through to its build path. |
 
 The operator never tries to "convert" a host from one mode to the other.
@@ -106,7 +107,7 @@ for production; the script tears down the running kmd, so the node
 briefly has no `/dev/tenstorrent`.
 
 ```bash
-NODE=e01cs01
+NODE=node-1
 
 # 1. Cordon and drain device-holding workloads (and anything else
 #    on the node). Adjust the selector to match how your workloads
@@ -171,7 +172,7 @@ spec:
   version: "2.8.0"                      # whatever DKMS was pinning, or the version you want to land on
   nodeSelector:
     matchLabels:
-      kubernetes.io/hostname: e01cs01   # one node only for the first cut
+      kubernetes.io/hostname: node-1   # one node only for the first cut
   paused: true                          # flip to false after the vacate
   upgradePolicy:
     drain:

@@ -76,9 +76,9 @@ labels:
 ```bash
 $ kubectl get nodes -L driver.tenstorrent.com/kmd-version,tt-smi.driver.tenstorrent.com/version,driver.tenstorrent.com/install-mode,firmware.tenstorrent.com/fw-version
 NAME      STATUS   KMD-VERSION   VERSION   INSTALL-MODE   FW-VERSION
-e01cs01   Ready    2.8.0         5.2.0     container      19.9.0.0
-e01cs02   Ready    2.8.0         5.2.0     container      19.9.0.0
-e01cs03   Ready    2.8.0         5.2.0     container      19.9.0.0
+node-1   Ready    2.8.0         5.2.0     container      19.9.0.0
+node-2   Ready    2.8.0         5.2.0     container      19.9.0.0
+node-3   Ready    2.8.0         5.2.0     container      19.9.0.0
 ```
 
 ```bash
@@ -109,7 +109,7 @@ unloads it, and the builder rebuilds + loads on next boot.
 
 ## Mixed environments
 
-If a node already has `tt-kmd` installed via apt/DKMS/tt-ansible, the operator
+If a node already has `tt-kmd` installed via apt or DKMS (e.g. by a host-side config-management tool), the operator
 detects this on first reconcile, labels the node
 `driver.tenstorrent.com/install-mode=host`, and stands down — no `rmmod`,
 no rebuild, no overwriting `tt-smi`. The operator still reports the loaded
@@ -141,9 +141,6 @@ ownership"), set `driver.tenstorrent.com/skip=true` on the node.
 - [tt-smi](https://github.com/tenstorrent/tt-smi) — the userspace CLI
 - [tt-system-firmware](https://github.com/tenstorrent/tt-system-firmware) —
   firmware bundle releases
-- [tt-ansible](https://github.com/tenstorrent/tt-ansible) — the legacy
-  bare-metal install flow (driver-manager replaces this on a Kubernetes
-  cluster, but the two coexist correctly via the install-mode detection)
 
 ## For contributors
 
