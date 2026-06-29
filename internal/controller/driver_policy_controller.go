@@ -598,6 +598,13 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							// builders installed at /opt/tt.
 							{Name: "host-opt", MountPath: "/host/opt"},
 							{Name: "host-usr-local-bin", MountPath: "/host/usr/local/bin"},
+							// /host/etc/udev/rules.d for staging tt-kmd's
+							// upstream udev rule so /dev/tenstorrent/* land
+							// with MODE=0666 (matches DKMS/apt install).
+							// /host/dev for chmod-ing the device nodes that
+							// devtmpfs already created at the default 0600.
+							{Name: "host-udev-rules", MountPath: "/host/etc/udev/rules.d"},
+							{Name: "host-dev", MountPath: "/host/dev"},
 						},
 						// Pod is Ready iff /sys/module reports the desired
 						// version. The container has its own sysfs mount but
@@ -625,6 +632,8 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 						{Name: "var-lib-dkms", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/dkms", Type: &hostPathDirOrCreate}}},
 						{Name: "host-opt", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/opt", Type: &hostPathDirOrCreate}}},
 						{Name: "host-usr-local-bin", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin", Type: &hostPathDirOrCreate}}},
+						{Name: "host-udev-rules", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/etc/udev/rules.d", Type: &hostPathDirOrCreate}}},
+						{Name: "host-dev", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev", Type: &hostPathDir}}},
 					},
 				},
 			},
