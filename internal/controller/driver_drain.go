@@ -134,7 +134,8 @@ func driverCordonOpts(crName string) drain.CordonOpts {
 func (r *DriverPolicyReconciler) listMatchedNodes(
 	ctx context.Context, cr *driverv1alpha1.TenstorrentDriverPolicy,
 ) ([]corev1.Node, error) {
-	sel, err := metav1.LabelSelectorAsSelector(&cr.Spec.NodeSelector)
+	effSel := cr.Spec.EffectiveNodeAffinity()
+	sel, err := metav1.LabelSelectorAsSelector(&effSel)
 	if err != nil {
 		return nil, err
 	}

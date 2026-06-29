@@ -6,6 +6,8 @@ import (
 )
 
 // TenstorrentDriverPolicySpec declares the desired tt-kmd version for a set of nodes.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.nodeAffinity) != has(self.nodeSelector)",message="exactly one of spec.nodeAffinity or spec.nodeSelector must be set"
 type TenstorrentDriverPolicySpec struct {
 	// Version is the tt-kmd release, e.g. "2.8.0". Maps to the upstream tag
 	// ttkmd-<version>.
@@ -13,11 +15,23 @@ type TenstorrentDriverPolicySpec struct {
 	// +kubebuilder:validation:Pattern=`^[0-9]+\.[0-9]+\.[0-9]+$`
 	Version string `json:"version"`
 
-	// NodeSelector picks the nodes this policy applies to. The controller
-	// ANDs in the Tenstorrent NFD label so a wide selector can't accidentally
-	// hit the head node.
-	// +kubebuilder:validation:Required
-	NodeSelector metav1.LabelSelector `json:"nodeSelector"`
+	// NodeAffinity picks the nodes this policy applies to. Shape matches
+	// metav1.LabelSelector (matchLabels and/or matchExpressions); the
+	// controller ANDs in the Tenstorrent NFD label so a wide selector
+	// can't accidentally hit the head node.
+	//
+	// Exactly one of nodeAffinity or the deprecated nodeSelector must be set.
+	// +optional
+	NodeAffinity *metav1.LabelSelector `json:"nodeAffinity,omitempty"`
+
+	// NodeSelector is the v1alpha1 name for NodeAffinity, kept for
+	// backwards compatibility with CRs written before the rename. Same
+	// shape, same semantics. Prefer NodeAffinity for new CRs.
+	//
+	// Deprecated: use NodeAffinity instead. Will be removed in a future
+	// API version.
+	// +optional
+	NodeSelector *metav1.LabelSelector `json:"nodeSelector,omitempty"`
 
 	// Paused stops the controller from advancing state. The DaemonSet stays
 	// running with its current spec; in-flight installs are not interrupted.
@@ -246,4 +260,18 @@ type TenstorrentDriverPolicyList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []TenstorrentDriverPolicy `json:"items"`
+}
+
+// EffectiveNodeAffinity returns the resolved label selector for matching
+// nodes. nodeAffinity wins if set; otherwise falls back to the deprecated
+// nodeSelector alias. Returns an empty selector (matches all) if both are
+// nil — CRD CEL validation already rejects that case.
+func (s *TenstorrentDriverPolicySpec) EffectiveNodeAffinity() metav1.LabelSelector {
+	if s.NodeAffinity != nil {
+		return *s.NodeAffinity
+	}
+	if s.NodeSelector != nil {
+		return *s.NodeSelector
+	}
+	return metav1.LabelSelector{}
 }

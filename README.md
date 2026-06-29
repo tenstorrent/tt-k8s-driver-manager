@@ -39,7 +39,7 @@ metadata:
   name: default
 spec:
   version: "2.8.0"      # required: a tt-kmd release tag minus ttkmd-
-  nodeSelector: {}      # matches all nodes; ANDed with the NFD tt-present label
+  nodeAffinity: {}      # matches all nodes; ANDed with the NFD tt-present label
   upgradePolicy:
     drain:
       enable: true      # cordon + evict /dev/tenstorrent holders before rmmod
@@ -58,7 +58,7 @@ metadata:
   name: default
 spec:
   version: "19.9.0"     # required: tt-system-firmware release version
-  nodeSelector: {}      # ANDed with the NFD tt-present label
+  nodeAffinity: {}      # ANDed with the NFD tt-present label
   upgradePolicy:
     maxParallel: 1      # nodes flashing simultaneously across this CR
     drain:

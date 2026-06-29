@@ -7,4 +7,4 @@ metadata:
   name: aus2-dev2-default
 spec:
   version: "2.8.0"
-  nodeSelector: {}
+  nodeAffinity: {}

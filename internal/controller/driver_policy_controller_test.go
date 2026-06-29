@@ -15,7 +15,7 @@ func newDriverCR() *driverv1alpha1.TenstorrentDriverPolicy {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-cr", Generation: 1, UID: "00000000-0000-0000-0000-000000000001"},
 		Spec: driverv1alpha1.TenstorrentDriverPolicySpec{
 			Version:      "2.8.0",
-			NodeSelector: metav1.LabelSelector{},
+			NodeAffinity: &metav1.LabelSelector{},
 		},
 	}
 }

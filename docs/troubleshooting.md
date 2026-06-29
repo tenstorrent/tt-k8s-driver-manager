@@ -213,7 +213,7 @@ than the host OS, the binary needs glibc symbols the host doesn't have.
 Fix: set `ARG UBUNTU_VERSION` in `images/driver-build/Dockerfile` to
 the hosts' Ubuntu release and push. Mixed-OS fleets need one builder
 image (and so one `TenstorrentDriverPolicy` with a matching
-`nodeSelector`) per Ubuntu release.
+`nodeAffinity`) per Ubuntu release.
 
 ## CR keeps re-flashing despite node being at the right version
 
