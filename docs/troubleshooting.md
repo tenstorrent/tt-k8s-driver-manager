@@ -215,33 +215,6 @@ the hosts' Ubuntu release and push. Mixed-OS fleets need one builder
 image (and so one `TenstorrentDriverPolicy` with a matching
 `nodeSelector`) per Ubuntu release.
 
-## tt-smi as non-root says "No Tenstorrent devices detected!"
-
-```
-$ tt-smi
- No Tenstorrent devices detected! Please check your hardware and try again. Exiting...
-$ ls -lah /dev/tenstorrent/
-crw-------  1 root root 236, 0 ...
-```
-
-The device nodes exist but are mode `0600 root:root`, so non-root users
-can't `open()` them. This happens when a builder pod insmods tt-kmd
-without staging the upstream udev rule (`MODE="0666"`) onto the host
-— pre-v0.0.4 builder images skipped that step, and DKMS/apt installs
-of tt-kmd handle it via the rule shipped in the .deb.
-
-Fix: bump the builder image to a tag that bundles the udev rule
-(v0.0.4+). On next pod restart the entrypoint installs
-`/etc/udev/rules.d/50-tenstorrent.rules` and chmods the existing
-device nodes to `0666`. Quick manual fix on a single node:
-
-```bash
-sudo curl -fsSL \
-  https://raw.githubusercontent.com/tenstorrent/tt-kmd/ttkmd-$(cat /sys/module/tenstorrent/version)/udev-50-tenstorrent.rules \
-  -o /etc/udev/rules.d/50-tenstorrent.rules
-sudo chmod 0666 /dev/tenstorrent/*
-```
-
 ## Builder pod can't clone tt-kmd — proxy / DNS
 
 ```
