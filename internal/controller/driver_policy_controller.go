@@ -239,7 +239,8 @@ func podEnv(p *corev1.Pod, name string) string {
 }
 
 func (r *DriverPolicyReconciler) countMatchedNodes(ctx context.Context, cr *driverv1alpha1.TenstorrentDriverPolicy) (int32, error) {
-	sel, err := metav1.LabelSelectorAsSelector(&cr.Spec.NodeSelector)
+	effSel := cr.Spec.EffectiveNodeAffinity()
+	sel, err := metav1.LabelSelectorAsSelector(&effSel)
 	if err != nil {
 		return 0, err
 	}
@@ -497,14 +498,14 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 		"driver.tenstorrent.com/cr":   cr.Name,
 	}
 
-	// Merge spec.nodeSelector with the NFD-presence requirement and a
+	// Merge spec.nodeAffinity with the NFD-presence requirement and a
 	// DoesNotExist gate on LabelDriverSkip. Adding the skip label to a
 	// running node makes the existing installer pod no longer match
 	// nodeAffinity, so kubelet evicts it — the skip takes effect
 	// immediately, not just on the next scheduling decision.
 	nodeSelectorTerms := []corev1.NodeSelectorTerm{{
 		MatchExpressions: append(
-			labelSelectorToExpressions(cr.Spec.NodeSelector),
+			labelSelectorToExpressions(cr.Spec.EffectiveNodeAffinity()),
 			corev1.NodeSelectorRequirement{
 				Key: LabelTenstorrentPresent, Operator: corev1.NodeSelectorOpIn, Values: []string{"true"},
 			},
@@ -598,6 +599,13 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							// builders installed at /opt/tt.
 							{Name: "host-opt", MountPath: "/host/opt"},
 							{Name: "host-usr-local-bin", MountPath: "/host/usr/local/bin"},
+							// /host/etc/udev/rules.d for staging tt-kmd's
+							// upstream udev rule so /dev/tenstorrent/* land
+							// with MODE=0666 (matches DKMS/apt install).
+							// /host/dev for chmod-ing the device nodes that
+							// devtmpfs already created at the default 0600.
+							{Name: "host-udev-rules", MountPath: "/host/etc/udev/rules.d"},
+							{Name: "host-dev", MountPath: "/host/dev"},
 						},
 						// Pod is Ready iff /sys/module reports the desired
 						// version. The container has its own sysfs mount but
@@ -625,6 +633,8 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 						{Name: "var-lib-dkms", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/var/lib/dkms", Type: &hostPathDirOrCreate}}},
 						{Name: "host-opt", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/opt", Type: &hostPathDirOrCreate}}},
 						{Name: "host-usr-local-bin", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/usr/local/bin", Type: &hostPathDirOrCreate}}},
+						{Name: "host-udev-rules", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/etc/udev/rules.d", Type: &hostPathDirOrCreate}}},
+						{Name: "host-dev", VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{Path: "/dev", Type: &hostPathDir}}},
 					},
 				},
 			},

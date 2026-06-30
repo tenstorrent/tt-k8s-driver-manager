@@ -14,7 +14,7 @@ func operatorNamespace() string {
 
 // requireTenstorrentLabel returns false when REQUIRE_TT_PCI_LABEL=false is set.
 // Default is true: nodes without the NFD label are ignored even if they match
-// a CR's nodeSelector.
+// a CR's nodeAffinity.
 func requireTenstorrentLabel() bool {
 	return os.Getenv("REQUIRE_TT_PCI_LABEL") != "false"
 }

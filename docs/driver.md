@@ -12,14 +12,14 @@ metadata:
   name: default
 spec:
   version: "2.8.0"
-  nodeSelector: {}
+  nodeAffinity: {}
 ```
 
 What happens:
 
 1. Controller creates a privileged DaemonSet named `ttdrv-<crname>` in
    the operator namespace.
-2. Pod template's `nodeAffinity` is `nodeSelector` ∧
+2. Pod template's `nodeAffinity` is `spec.nodeAffinity` ∧
    `feature.node.kubernetes.io/pci-1200_1e52.present=true` ∧
    `!exists(driver.tenstorrent.com/skip)`. So pods schedule only on
    Tenstorrent nodes that aren't opted out.
@@ -44,7 +44,7 @@ What happens:
 | Field | Default | Purpose |
 |---|---|---|
 | `version` | required | tt-kmd release tag, minus `ttkmd-` prefix. Must match `^[0-9]+\.[0-9]+\.[0-9]+$`. |
-| `nodeSelector` | required | Standard `metav1.LabelSelector`. Empty `{}` matches all nodes (still ANDed with NFD present-label, so only Tenstorrent nodes get hit). |
+| `nodeAffinity` | required | Standard `metav1.LabelSelector` (`matchLabels` and/or `matchExpressions`). Empty `{}` matches all nodes (still ANDed with NFD present-label, so only Tenstorrent nodes get hit). The v1alpha1 alias `nodeSelector` accepts the same shape and is deprecated. |
 | `paused` | `false` | Soft stop. Controller stops reconciling; existing DS keeps running. Useful for blast-radius pauses without deleting the CR. |
 | `upgradePolicy.drain.enable` | `true` | Pass 1: cordon + evict pods that `hostPath`-mount `/dev/tenstorrent` before the DS template is bumped, so refcount has dropped to 0 by the time the new builder pod runs `rmmod`. See [Upgrade flow](#upgrade-flow). |
 | `upgradePolicy.drain.fullNode` | `true` | Pass 2: full-node `kubectl drain` semantics — evict every non-DS pod on the cordoned node. Catches privileged containers that get `/dev/tenstorrent` via containerd auto-mount (no explicit hostPath). |
@@ -67,7 +67,7 @@ metadata:
   name: fleet
 spec:
   version: "2.8.0"
-  nodeSelector: {}
+  nodeAffinity: {}
 ```
 
 ### Multiple versions across pools
@@ -81,14 +81,14 @@ kind: TenstorrentDriverPolicy
 metadata: { name: prod }
 spec:
   version: "2.7.0"
-  nodeSelector: { matchLabels: { tt.tenstorrent.com/pool: prod } }
+  nodeAffinity: { matchLabels: { tt.tenstorrent.com/pool: prod } }
 ---
 apiVersion: driver.tenstorrent.com/v1alpha1
 kind: TenstorrentDriverPolicy
 metadata: { name: canary }
 spec:
   version: "2.8.0"
-  nodeSelector: { matchLabels: { tt.tenstorrent.com/pool: canary } }
+  nodeAffinity: { matchLabels: { tt.tenstorrent.com/pool: canary } }
 ```
 
 The selectors must be disjoint — overlapping CRs both spawn DS pods on

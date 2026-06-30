@@ -229,13 +229,14 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	return ctrl.Result{}, nil
 }
 
-// matchedNodes returns nodes matching the CR's nodeSelector AND the
+// matchedNodes returns nodes matching the CR's nodeAffinity AND the
 // Tenstorrent NFD label (unless REQUIRE_TT_PCI_LABEL=false).
 // Nodes carrying firmware.tenstorrent.com/skip=true are excluded.
 func (r *FirmwarePolicyReconciler) matchedNodes(ctx context.Context, cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) ([]corev1.Node, error) {
-	sel, err := metav1.LabelSelectorAsSelector(&cr.Spec.NodeSelector)
+	effSel := cr.Spec.EffectiveNodeAffinity()
+	sel, err := metav1.LabelSelectorAsSelector(&effSel)
 	if err != nil {
-		return nil, fmt.Errorf("invalid nodeSelector: %w", err)
+		return nil, fmt.Errorf("invalid nodeAffinity: %w", err)
 	}
 
 	var all corev1.NodeList

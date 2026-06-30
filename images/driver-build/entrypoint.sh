@@ -20,6 +20,8 @@ KVER=$(uname -r)
 EXPECTED="${TT_KMD_VERSION:?TT_KMD_VERSION env var required}"
 CACHE_DIR="/var/cache/tt-kmd/${KVER}/${EXPECTED}"
 KO_PATH="${CACHE_DIR}/${MODULE}.ko"
+UDEV_BUNDLED_PATH="/usr/local/share/tt-k8s-driver-manager/udev-50-tenstorrent.rules"
+UDEV_HOST_PATH="/host/etc/udev/rules.d/50-tenstorrent.rules"
 
 API="https://kubernetes.default.svc"
 TOKEN_PATH="/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -81,6 +83,31 @@ host_install_detected() {
     return 1
 }
 
+# install_udev_rule stages tt-kmd's udev rule on the host so
+# /dev/tenstorrent/* land with the same MODE="0666" that a DKMS/apt
+# install gives. The rule is bundled in the image (see Dockerfile);
+# we also chmod the already-created device nodes since the rule only
+# applies to future device events. Idempotent; safe to run every
+# reconcile.
+install_udev_rule() {
+    if [ ! -d /host/etc/udev/rules.d ]; then
+        echo "WARN: /host/etc/udev/rules.d not mounted; skipping udev rule install"
+        return 0
+    fi
+    if [ -f "${UDEV_BUNDLED_PATH}" ]; then
+        install -m 0644 "${UDEV_BUNDLED_PATH}" "${UDEV_HOST_PATH}"
+        echo "installed udev rule at host:${UDEV_HOST_PATH#/host}"
+    else
+        echo "WARN: ${UDEV_BUNDLED_PATH} missing from image; skipping rule install"
+    fi
+    if [ -d /host/dev/tenstorrent ]; then
+        for dev in /host/dev/tenstorrent/[0-9]*; do
+            [ -c "$dev" ] || continue
+            chmod 0666 "$dev" 2>/dev/null || true
+        done
+    fi
+}
+
 # install_tt_smi copies the self-contained tt-smi binary to the host.
 # Skip in host-managed mode — the host already has its own tt-smi from
 # tt-ansible / apt and we shouldn't overwrite it.
@@ -123,6 +150,7 @@ if [ "$LOADED" = "$EXPECTED" ]; then
     echo "tt-kmd ${LOADED} matches TT_KMD_VERSION on kernel ${KVER}; idling"
     label_node "driver.tenstorrent.com/install-mode" "container"
     install_tt_smi
+    install_udev_rule
     exec sleep infinity
 fi
 
@@ -212,5 +240,6 @@ fi
 
 label_node "driver.tenstorrent.com/install-mode" "container"
 install_tt_smi
+install_udev_rule
 echo "tt-kmd ${LOADED} loaded on kernel ${KVER}; idling"
 exec sleep infinity

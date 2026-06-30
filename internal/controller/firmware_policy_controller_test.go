@@ -40,7 +40,7 @@ func newCR() *firmwarev1alpha1.TenstorrentFirmwarePolicy {
 		ObjectMeta: metav1.ObjectMeta{Name: "test-cr", Generation: 1},
 		Spec: firmwarev1alpha1.TenstorrentFirmwarePolicySpec{
 			Version:      "19.8.0",
-			NodeSelector: metav1.LabelSelector{},
+			NodeAffinity: &metav1.LabelSelector{},
 			UpgradePolicy: firmwarev1alpha1.UpgradePolicy{
 				MaxParallel: 1,
 			},
@@ -48,7 +48,7 @@ func newCR() *firmwarev1alpha1.TenstorrentFirmwarePolicy {
 	}
 }
 
-// nodeSelector and the NFD label gate are the cluster's safety belt against
+// nodeAffinity and the NFD label gate are the cluster's safety belt against
 // accidentally flashing the head node — these must hold even when the
 // selector is permissive.
 func TestMatchedNodes_RequiresNFDLabel(t *testing.T) {

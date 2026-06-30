@@ -1,7 +1,7 @@
 name: images
 
 # Builds and pushes the three container images this repo produces:
-#   - controller: ghcr.io/tenstorrent/tt-k8s-driver-manager-controller
+#   - controller: ghcr.io/tenstorrent/tt-k8s-driver-manager
 #   - builder:    ghcr.io/tenstorrent/tt-k8s-driver-manager-builder
 #                 (containerized tt-kmd build: clones tt-kmd, builds
 #                  against host kernel headers, insmods. Single image
@@ -38,7 +38,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  CONTROLLER_IMAGE: ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-controller
+  CONTROLLER_IMAGE: ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager
   BUILDER_IMAGE:    ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-builder
   FLASHER_IMAGE:    ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-flasher
 

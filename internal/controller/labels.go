@@ -14,7 +14,7 @@ const (
 	// LabelDriverSkip opts a node out of driver reconciliation. Mirrors
 	// LabelSkip on the firmware side — set to "true" on a node and the
 	// driver controller will refuse to schedule its installer DaemonSet
-	// there even if the node otherwise matches spec.nodeSelector.
+	// there even if the node otherwise matches spec.nodeAffinity.
 	LabelDriverSkip = "driver.tenstorrent.com/skip"
 
 	// Driver-side cordon annotations. Distinct prefix from the firmware
