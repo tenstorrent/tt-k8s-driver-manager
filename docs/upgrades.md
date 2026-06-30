@@ -11,7 +11,7 @@ Bump `spec.version` on the `TenstorrentDriverPolicy`:
 kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.8.0"}}'
 ```
 
-Per-node sequence (full state machine in [driver.md](driver.md#upgrade-flow)):
+Per-node sequence (full state machine in [Upgrade flow](driver.md#upgrade-flow)):
 
 1. Controller cordons the node and flips
    `controller.deployGates` labels (default
@@ -89,7 +89,7 @@ Bump `spec.version` on the `TenstorrentFirmwarePolicy`:
 kubectl patch ttfwp default --type merge -p '{"spec":{"version":"19.9.0"}}'
 ```
 
-Per-node sequence is the state machine described in [firmware.md](firmware.md):
+Per-node sequence is the state machine described in [Firmware Management](firmware.md):
 
 `Pending → (Cordoning → Draining)? → Flashing → Uncordoning → Done`
 

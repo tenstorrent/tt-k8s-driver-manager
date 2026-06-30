@@ -47,7 +47,7 @@ This installs:
   one for the per-CR builder/flasher pods.
 
 It does **not** install `node-feature-discovery`. Use the
-[tt-operator](https://github.com/tenstorrent/tt-operator) umbrella chart
+[tt-operator](https://docs.tenstorrent.com/tt-operator/) umbrella chart
 if you want NFD installed for you, or [install NFD separately](#nfd-setup).
 
 ## Install via the umbrella chart (driver-manager + NFD)
@@ -131,7 +131,7 @@ node-3   Ready    true
 If `PRESENT` is empty on a node that has a Tenstorrent card, NFD isn't
 seeing the device — check the NFD worker pod's logs on that node.
 
-Apply a CR to actually install the driver — see [docs/driver.md](driver.md).
+Apply a CR to actually install the driver — see [Driver Management](driver.md).
 
 ## Uninstall
 
@@ -152,4 +152,4 @@ What it does NOT remove (intentional):
 - Any state on the hosts: `/var/cache/tt-kmd/*`,
   `/usr/local/bin/tt-smi`. The kernel module stays loaded too. Clean
   these manually if you're tearing down a node — see
-  [docs/troubleshooting.md → fully clean a host](troubleshooting.md#fully-clean-a-host).
+  [Fully clean a host](troubleshooting.md#fully-clean-a-host).

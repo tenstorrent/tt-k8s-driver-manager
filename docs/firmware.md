@@ -1,4 +1,4 @@
-# Firmware management
+# Firmware Management
 
 The firmware controller flashes Tenstorrent device firmware via per-node
 `Job` pods that run `tt-flash`. State is declared via
@@ -210,15 +210,3 @@ table. Install via `make install-plugins`.
 kubectl tt fw                # per-CR table
 kubectl tt fw logs <crname>  # tail logs from in-flight Jobs
 ```
-
-## What's out of v1
-
-- Galaxy / TG out-of-band firmware (the flasher only does PCIe in-band).
-- Tensix harvesting bundle regeneration.
-- LLMBox `tt-topo` post-flash mesh config.
-- Cluster-wide reservation coordination with an external workload
-  scheduler (when running alongside CI / dev that also consumes nodes
-  — coordinate out-of-band today).
-
-See `docs/firmware-operator-design.md` (deferred) for what each of
-these will look like.

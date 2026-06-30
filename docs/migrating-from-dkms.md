@@ -55,7 +55,7 @@ The builder pod checks two paths on the host filesystem at start-up:
 If **either** exists, the node is treated as host-managed and the builder
 idles. Both must be gone for the builder to fall through to its build
 path. This is the same check documented in
-[driver.md → Mixed mode](driver.md#mixed-mode).
+[Mixed mode](driver.md#mixed-mode).
 
 ## Per-node vacate procedure
 
@@ -185,7 +185,7 @@ kubectl patch ttdp migration-test --type merge -p '{"spec":{"paused":false}}'
 ```
 
 Once this single-node migration is clean, widen `nodeSelector` (or apply
-a fleet-scoped CR like the one in [driver.md → Whole-fleet install](driver.md#whole-fleet-install))
+a fleet-scoped CR like the one in [Whole-fleet install](driver.md#whole-fleet-install))
 and migrate the rest of the fleet one node at a time.
 
 ## Watch-outs
@@ -202,8 +202,7 @@ and migrate the rest of the fleet one node at a time.
 - **Image-pull and proxy.** The builder pod pulls
   `ghcr.io/tenstorrent/tt-k8s-driver-manager-builder` and `git clone`s
   tt-kmd from `github.com`. In proxied clusters, set the
-  `controller.extraEnv` chart value (added in
-  [#31](https://github.com/tenstorrent/tt-k8s-driver-manager/pull/31))
+  `controller.extraEnv` chart value
   to propagate `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` from the
   controller into the spawned builder pod — without that the builder
   hangs on the git clone.
@@ -248,14 +247,10 @@ driver.tenstorrent.com/skip=true`.
 
 ## See also
 
-- [driver.md → Mixed mode](driver.md#mixed-mode) — the detection logic
+- [Mixed mode](driver.md#mixed-mode) — the detection logic
   from the operator's side.
-- [troubleshooting.md → Fully clean a host](troubleshooting.md#fully-clean-a-host)
+- [Fully clean a host](troubleshooting.md#fully-clean-a-host)
   — a broader sweep that also clears operator-side state (cache,
   tt-smi, etc.); the vacate script above is the DKMS-only subset.
 - [`controller.extraEnv`](configuration.md) —
-  proxy env propagation to spawned builder pods (PR
-  [#31](https://github.com/tenstorrent/tt-k8s-driver-manager/pull/31)).
-- [tt-operator integration test](https://github.com/tenstorrent/tt-operator/blob/main/.github/workflows/integration-rke2.yaml)
-  — exercises the vacate-and-rebuild sequence in CI on a single-node
-  N150 runner; canonical reference for the exact shell commands.
+  proxy env propagation to spawned builder pods.

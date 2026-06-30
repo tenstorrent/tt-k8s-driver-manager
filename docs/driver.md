@@ -1,4 +1,4 @@
-# Driver management
+# Driver Management
 
 Driver-manager installs and maintains a specific `tt-kmd` version on each
 Tenstorrent node via a `TenstorrentDriverPolicy` (short name: `ttdp`).
@@ -47,8 +47,8 @@ What happens:
 | `nodeSelector` | required | Standard `metav1.LabelSelector`. Empty `{}` matches all nodes (still ANDed with NFD present-label, so only Tenstorrent nodes get hit). |
 | `paused` | `false` | Soft stop. Controller stops reconciling; existing DS keeps running. Useful for blast-radius pauses without deleting the CR. |
 | `upgradePolicy.drain.enable` | `true` | Pass 1: cordon + evict pods that `hostPath`-mount `/dev/tenstorrent` before the DS template is bumped, so refcount has dropped to 0 by the time the new builder pod runs `rmmod`. See [Upgrade flow](#upgrade-flow). |
-| `upgradePolicy.drain.fullNode` | `true` | Pass 2: full-node `kubectl drain` semantics — evict every non-DS pod on the cordoned node. Catches privileged containers that get `/dev/tenstorrent` via containerd auto-mount (no explicit hostPath). Mirrors NVIDIA's `ENABLE_AUTO_DRAIN`. |
-| `upgradePolicy.drain.podSelectorLabel` | `""` | Restricts pass 2 to pods matching this selector (`key=value`, `key`, `key notin (a,b)`). Empty = sweep everything. Mirrors NVIDIA's `DRAIN_POD_SELECTOR_LABEL`. |
+| `upgradePolicy.drain.fullNode` | `true` | Pass 2: full-node `kubectl drain` semantics — evict every non-DS pod on the cordoned node. Catches privileged containers that get `/dev/tenstorrent` via containerd auto-mount (no explicit hostPath). |
+| `upgradePolicy.drain.podSelectorLabel` | `""` | Restricts pass 2 to pods matching this selector (`key=value`, `key`, `key notin (a,b)`). Empty = sweep everything. |
 | `upgradePolicy.drain.force` | `false` | Evict bare pods (no controller) instead of skipping. Applies to both passes. |
 | `upgradePolicy.drain.deleteEmptyDir` | `true` | Pass 2 evicts pods with `emptyDir` volumes (kubectl drain's `--delete-emptydir-data`). |
 | `upgradePolicy.drain.timeoutSeconds` | `600` | Per-node drain deadline. |
@@ -181,7 +181,7 @@ node-label keys the controller flips off (`=false`) during a kmd
 upgrade and removes on uncordon. Sibling DaemonSets that consume
 `/dev/tenstorrent` (tt-telemetry, future workloads) must include
 `NotIn ["false"]` on the same label key in their `nodeAffinity` — the
-chart-level pattern from NVIDIA gpu-operator. Default list:
+chart-level pattern. Default list:
 `tenstorrent.com/deploy.tt-telemetry`. Set to `[]` to disable the
 gate-flip entirely.
 
@@ -267,9 +267,9 @@ The pod still propagates `kmd-version` to the node label, so observability
 works the same as for container-managed nodes.
 
 To force a host-managed node into container mode, remove the host's DKMS
-state — see [docs/migrating-from-dkms.md](migrating-from-dkms.md) for the
+state — see [Migrating from DKMS](migrating-from-dkms.md) for the
 per-node vacate procedure plus cluster-side coordination, or
-[docs/troubleshooting.md → fully clean a host](troubleshooting.md#fully-clean-a-host)
+[Fully clean a host](troubleshooting.md#fully-clean-a-host)
 for the broader operator-side sweep.
 To do the inverse (keep operator out entirely, even from labelling), use
 the [skip label](#skip-label).

@@ -186,7 +186,7 @@ or `/usr/src/tenstorrent-<v>/dkms.conf` and stood down. The host's
 tt-kmd stays, the operator doesn't `rmmod` or rebuild.
 
 If you want the operator to take over, follow
-[docs/migrating-from-dkms.md](migrating-from-dkms.md) — it has the
+[Migrating from DKMS](migrating-from-dkms.md) — it has the
 per-node vacate script, the cluster-side cordon/drain coordination, and
 the watch-outs (both DKMS signal dirs, refcnt > 0, proxied builder).
 
@@ -294,8 +294,7 @@ safety.
 You bumped `TenstorrentFirmwarePolicy.spec.flasher.image` (or
 `forceWrite`, `imagePullPolicy`, etc.) and the controller did nothing.
 
-Known limitation
-([tt-k8s-driver-manager#42](https://github.com/tenstorrent/tt-k8s-driver-manager/issues/42)):
+Known limitation:
 the per-node flash Job name is hashed on `(CR name, node name, kmd
 version)`. The flasher fields are NOT in the hash. If a Job already
 exists at that name with `Completed` status, the controller treats
