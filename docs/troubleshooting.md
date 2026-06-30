@@ -7,7 +7,7 @@ symptom you see in `kubectl`, the root cause, and the fix.
 
 ```
 NAME                            READY   STATUS             RESTARTS   AGE
-ttdrv-aus2-dev2-default-...     0/1     ImagePullBackOff   0          5m
+ttdrv-default-...     0/1     ImagePullBackOff   0          5m
 ```
 
 `ghcr.io/tenstorrent/*` images are private. The pod's ServiceAccount
@@ -37,7 +37,7 @@ SAML-authorized for the `tenstorrent` org. See
 ## "Pod is in use; cannot reinstall" — refcnt > 0
 
 ```
-$ kubectl -n tt-k8s-driver-manager-system logs ttdrv-aus2-dev2-default-...
+$ kubectl -n tt-k8s-driver-manager-system logs ttdrv-default-...
 ERROR: tt-kmd 2.7.0 loaded with refcnt > 0; cannot reinstall 2.8.0
 Holders: 12345 23456
 Drain workloads holding /dev/tenstorrent and let the next reconcile retry.
@@ -125,7 +125,7 @@ kubectl -n tt-k8s-driver-manager-system delete pod -l app.kubernetes.io/componen
 ```bash
 $ kubectl get nodes -L feature.node.kubernetes.io/pci-1200_1e52.present
 NAME      STATUS   PRESENT
-e01cs01   Ready
+node-1   Ready
 ```
 
 (empty, but the node has a Tenstorrent card)
@@ -157,7 +157,7 @@ on dev nodes. There's a `hack/dev/label-fake-tt-nodes.yaml` for kind.
 
 ```bash
 $ kubectl -n tt-k8s-driver-manager-system get pod -l app.kubernetes.io/component=driver
-ttdrv-aus2-dev2-default-...   0/1     Running   0   30s
+ttdrv-default-...   0/1     Running   0   30s
 ```
 
 Pod's readiness probe checks `/sys/module/tenstorrent/version ==
@@ -173,12 +173,12 @@ wants:
 Check the pod's logs for the actual error. Then either drain
 workloads (refcnt → 0) or reboot the host.
 
-## Host has tt-kmd from tt-ansible; operator ignored it
+## Host has tt-kmd from DKMS/apt; operator ignored it
 
 ```bash
-$ kubectl get node e01cs03 -L driver.tenstorrent.com/install-mode
-NAME      INSTALL-MODE
-e01cs03   host
+$ kubectl get node node-1 -L driver.tenstorrent.com/install-mode
+NAME     INSTALL-MODE
+node-1   host
 ```
 
 Expected, not a bug. The builder pod detected `/var/lib/dkms/tenstorrent`
@@ -240,8 +240,9 @@ should be making this impossible.
 
 ## Fully clean a host
 
-When a node has been managed by both this operator and tt-ansible (or
-earlier non-container installer pods) and you want to start fresh:
+When a node has been managed by both this operator and a host-side
+DKMS installer (or earlier non-container installer pods) and you want
+to start fresh:
 
 ```bash
 # As root on the node:
@@ -260,8 +261,7 @@ After reboot, the host should have no trace of tt-kmd, and the
 builder pod will fall through to its build path on first reconcile.
 
 This can also be scripted via `kubectl debug node/<n> --profile=sysadmin
--- chroot /host bash -c '<script>'` so you don't need SSH access — see
-the aus2-dev2 deploy log in tt-operator for the exact commands.
+-- chroot /host bash -c '<script>'` so you don't need SSH access.
 
 ## When all else fails
 

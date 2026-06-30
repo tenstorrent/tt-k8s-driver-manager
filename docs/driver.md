@@ -168,9 +168,9 @@ A 3-node cluster upgrade takes ~1–2 min cache-cold, ~30s cache-warm
 ```bash
 $ kubectl get ttdp default -o jsonpath='{.status.nodes}' | jq
 [
-  {"name":"e01cs01","currentVersion":"2.8.0","state":"Done"},
-  {"name":"e01cs02","currentVersion":"2.7.0","state":"Draining"},
-  {"name":"e01cs03","currentVersion":"2.7.0","state":"Pending"}
+  {"name":"node-1","currentVersion":"2.8.0","state":"Done"},
+  {"name":"node-2","currentVersion":"2.7.0","state":"Draining"},
+  {"name":"node-3","currentVersion":"2.7.0","state":"Pending"}
 ]
 ```
 
@@ -250,8 +250,8 @@ as each pod's new version becomes Ready.
 ## Mixed mode
 
 driver-manager auto-detects nodes that already have a host-managed
-tt-kmd install (e.g. from `tt-ansible`'s `tt_kmd` role) and stands down
-on them. Signals checked:
+tt-kmd install (e.g. via apt/DKMS from a config-management tool) and
+stands down on them. Signals checked:
 
 - `/var/lib/dkms/tenstorrent/` exists — DKMS tracks the module.
 - `/usr/src/tenstorrent-<v>/dkms.conf` exists — DKMS source registered.

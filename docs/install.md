@@ -123,9 +123,9 @@ Then check NFD labelled your Tenstorrent nodes:
 ```bash
 $ kubectl get nodes -L feature.node.kubernetes.io/pci-1200_1e52.present
 NAME      STATUS   PRESENT
-e01cs01   Ready    true
-e01cs02   Ready    true
-e01cs03   Ready    true
+node-1   Ready    true
+node-2   Ready    true
+node-3   Ready    true
 ```
 
 If `PRESENT` is empty on a node that has a Tenstorrent card, NFD isn't
