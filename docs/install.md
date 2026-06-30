@@ -25,8 +25,6 @@ Per-cluster:
 
 - **Kubernetes 1.27+** (anything that supports kubebuilder v1).
 - **Helm 3.8+** (for OCI registry support).
-- **Ability to pull from `ghcr.io/tenstorrent/*`** — both for container
-  images and the chart. See [Image-pull setup](#image-pull-setup).
 
 ## Install via Helm (driver-manager only)
 
@@ -61,33 +59,6 @@ helm install tt-operator oci://ghcr.io/tenstorrent/helm-charts/tt-operator \
 Brings up node-feature-discovery + tt-k8s-driver-manager in one release. The
 `tt-k8s-driver-manager.*` block in the umbrella's `values.yaml` is forwarded
 to the subchart unchanged.
-
-## Image-pull setup
-
-`ghcr.io/tenstorrent/*` images are private. You need a
-`kubernetes.io/dockerconfigjson` secret in the install namespace and the
-relevant `ServiceAccount`s patched to use it.
-
-```bash
-# Replace <PAT> with a classic PAT (read:packages scope, SAML-authorized
-# for the tenstorrent org).
-kubectl create secret docker-registry ghcr-pull \
-  --namespace tt-k8s-driver-manager-system \
-  --docker-server=ghcr.io --docker-username=<your-gh-handle> --docker-password=<PAT>
-
-kubectl -n tt-k8s-driver-manager-system patch sa default \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-controller \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-installer \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-
-# Restart the controller so its pod picks the secret up:
-kubectl -n tt-k8s-driver-manager-system rollout restart deploy tt-k8s-driver-manager-controller
-```
-
-The classic-PAT-via-SAML requirement comes from GitHub's enterprise SSO
-policy on the org, not from this operator.
 
 ## NFD setup
 

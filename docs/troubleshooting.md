@@ -6,33 +6,25 @@ symptom you see in `kubectl`, the root cause, and the fix.
 ## ImagePullBackOff on the driver/flasher pods
 
 ```
-NAME                            READY   STATUS             RESTARTS   AGE
+NAME                  READY   STATUS             RESTARTS   AGE
 ttdrv-default-...     0/1     ImagePullBackOff   0          5m
 ```
 
-`ghcr.io/tenstorrent/*` images are private. The pod's ServiceAccount
-needs `imagePullSecrets` pointing at a `kubernetes.io/dockerconfigjson`
-secret in the same namespace.
-
 ```bash
 $ kubectl -n tt-k8s-driver-manager-system describe pod ttdrv-...
-... Failed to pull image ... 401 Unauthorized ...
+... Failed to pull image ... HTTP 4xx / network unreachable ...
 ```
 
-Fix:
+Image registries are public, so this is almost always one of:
 
-```bash
-kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-installer \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-kubectl -n tt-k8s-driver-manager-system delete pod -l app.kubernetes.io/component=driver
-```
-
-(Replace `tt-k8s-driver-manager-installer` with whatever Helm gave it —
-`kubectl -n tt-k8s-driver-manager-system get sa | grep installer`.)
-
-The `ghcr-pull` secret must contain a PAT with `read:packages` scope,
-SAML-authorized for the `tenstorrent` org. See
-[Install → image-pull setup](install.md#image-pull-setup).
+- **Egress blocked** to `ghcr.io` or `pkg-containers.githubusercontent.com`.
+  Check your cluster's proxy / firewall allowlist.
+- **Wrong image tag** in the policy or chart values — `docker pull
+  <image>:<tag>` from a workstation to confirm the tag exists.
+- **Pull secret left over** from a previous private-registry setup that
+  no longer authenticates. Drop the secret from the ServiceAccount:
+  `kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-installer
+  --type=json -p='[{"op":"remove","path":"/imagePullSecrets"}]'`.
 
 ## "Pod is in use; cannot reinstall" — refcnt > 0
 
