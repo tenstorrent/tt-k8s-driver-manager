@@ -215,6 +215,123 @@ the hosts' Ubuntu release and push. Mixed-OS fleets need one builder
 image (and so one `TenstorrentDriverPolicy` with a matching
 `nodeSelector`) per Ubuntu release.
 
+## Builder pod can't clone tt-kmd — proxy / DNS
+
+```
+$ kubectl -n tt-k8s-driver-manager-system logs ttdrv-default-...
+fatal: unable to access 'https://github.com/tenstorrent/tt-kmd.git/':
+  Could not resolve host: github.com
+```
+
+Builder pod has no network path to GitHub for the cache-miss clone.
+Common when pod egress goes through a proxy (CI behind squid, isolated
+clusters) and `HTTPS_PROXY` isn't set on the builder.
+
+The controller propagates its own `HTTPS_PROXY` / `HTTP_PROXY` /
+`NO_PROXY` env to spawned builder pods, so the fix is usually on the
+controller side. Check that the controller pod itself has the proxy
+env set:
+
+```bash
+kubectl -n tt-k8s-driver-manager-system get deploy \
+  tt-k8s-driver-manager-controller -o jsonpath='{.spec.template.spec.containers[0].env}' \
+  | jq '.[] | select(.name | test("PROXY"))'
+```
+
+If empty, set via Helm:
+
+```bash
+helm upgrade tt-k8s-driver-manager ... \
+  --set controller.extraEnv[0].name=HTTPS_PROXY \
+  --set controller.extraEnv[0].value=http://proxy.internal:3128 \
+  --set controller.extraEnv[1].name=NO_PROXY \
+  --set controller.extraEnv[1].value=10.0.0.0/8,.svc,.svc.cluster.local
+```
+
+The controller restart re-templates the builder DaemonSet with the
+new env; existing pods need a delete to re-roll.
+
+## Policy never matches — `MessageExternalCordon` on the CR
+
+```bash
+$ kubectl describe ttfp <name>
+...
+Status:
+  Per Node:
+    Name:     node-1
+    State:    Pending
+    Message:  node is cordoned but not by this operator
+```
+
+The node has `spec.unschedulable: true` but no
+`firmware.tenstorrent.com/cordoned-by=<policy-name>` (or the driver
+equivalent `driver.tenstorrent.com/cordoned-by`) annotation. The
+controller refuses to flash a node it didn't cordon itself — protects
+SREs who've taken nodes out of rotation for unrelated reasons.
+
+Either uncordon and let the controller cordon it itself:
+
+```bash
+kubectl uncordon <node>
+```
+
+…or claim the existing cordon by stamping the annotation:
+
+```bash
+kubectl annotate node <node> \
+  firmware.tenstorrent.com/cordoned-by=<policy-name>
+```
+
+(Same pattern for driver policies, with `driver.tenstorrent.com/cordoned-by`.)
+
+Alternative: set `upgradePolicy.drain.enable: false` on the CR to skip
+the cordon gate entirely — flash Job will land via its universal
+toleration regardless of cordon state. Loses the device-pod-eviction
+safety.
+
+## Flash didn't re-run after editing `spec.flasher.image`
+
+You bumped `TenstorrentFirmwarePolicy.spec.flasher.image` (or
+`forceWrite`, `imagePullPolicy`, etc.) and the controller did nothing.
+
+Known limitation
+([tt-k8s-driver-manager#42](https://github.com/tenstorrent/tt-k8s-driver-manager/issues/42)):
+the per-node flash Job name is hashed on `(CR name, node name, kmd
+version)`. The flasher fields are NOT in the hash. If a Job already
+exists at that name with `Completed` status, the controller treats
+the node as Done.
+
+Workarounds until #42 ships a fix:
+- Bump `spec.version` (forces a new Job name).
+- Delete the per-node Job:
+  `kubectl -n tt-k8s-driver-manager-system delete job -l driver.tenstorrent.com/cr=<name>,driver.tenstorrent.com/node=<node>`.
+- Wait out the 24h Job TTL — the next reconcile will spawn a fresh
+  Job that picks up the new flasher fields.
+
+## Multiple policies match the same node — `MessageNodeConflict`
+
+```bash
+$ kubectl describe ttfp <name>
+...
+    Message:  node is also matched by another firmware policy
+```
+
+Two `TenstorrentFirmwarePolicy` (or two `TenstorrentDriverPolicy`) CRs
+have `nodeSelector` overlap. Controller refuses to flash to avoid
+racing each other.
+
+Find the offenders:
+
+```bash
+kubectl get ttfp -o json | jq -r '
+  .items[] | {name: .metadata.name, selector: .spec.nodeSelector}'
+```
+
+Narrow one selector so each node matches exactly one CR. Typical
+mistake: a "wildcard" CR (empty `nodeSelector`) sitting next to a
+team-scoped CR. Add a `matchExpressions` `NotIn` on the wildcard or
+delete it.
+
 ## CR keeps re-flashing despite node being at the right version
 
 The firmware controller's "this node is done" signal is a `Complete`
