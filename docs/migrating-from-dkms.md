@@ -199,7 +199,7 @@ and migrate the rest of the fleet one node at a time.
   `find -delete` somewhere under `/lib/modules/$(uname -r)`. Locate
   with `find /lib/modules/$(uname -r) -name 'tenstorrent.ko*'` and
   delete by hand, then re-run `depmod -a`.
-- **Image-pull and proxy.** The builder pod pulls
+- **Proxy.** The builder pod pulls
   `ghcr.io/tenstorrent/tt-k8s-driver-manager-builder` and `git clone`s
   tt-kmd from `github.com`. In proxied clusters, set the
   `controller.extraEnv` chart value

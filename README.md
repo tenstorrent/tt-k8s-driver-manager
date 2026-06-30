@@ -125,7 +125,7 @@ ownership"), set `driver.tenstorrent.com/skip=true` on the node.
 
 | | |
 |---|---|
-| [Install](docs/install.md) | Prerequisites, image-pull setup, NFD, verifying |
+| [Install](docs/install.md) | Prerequisites, NFD, verifying |
 | [Drivers](docs/driver.md) | `TenstorrentDriverPolicy`, upgrade flow, drain policy, deploy gates, install-mode, skip label |
 | [Firmware](docs/firmware.md) | `TenstorrentFirmwarePolicy`, drain config, force-write flag |
 | [Upgrades](docs/upgrades.md) | Rolling-update semantics for tt-kmd, tt-smi, firmware, operator itself |
