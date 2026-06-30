@@ -25,8 +25,6 @@ Per-cluster:
 
 - **Kubernetes 1.27+** (anything that supports kubebuilder v1).
 - **Helm 3.8+** (for OCI registry support).
-- **Ability to pull from `ghcr.io/tenstorrent/*`** — both for container
-  images and the chart. See [Image-pull setup](#image-pull-setup).
 
 ## Install via Helm (driver-manager only)
 
@@ -47,7 +45,7 @@ This installs:
   one for the per-CR builder/flasher pods.
 
 It does **not** install `node-feature-discovery`. Use the
-[tt-operator](https://github.com/tenstorrent/tt-operator) umbrella chart
+[tt-operator](https://docs.tenstorrent.com/tt-operator/) umbrella chart
 if you want NFD installed for you, or [install NFD separately](#nfd-setup).
 
 ## Install via the umbrella chart (driver-manager + NFD)
@@ -61,33 +59,6 @@ helm install tt-operator oci://ghcr.io/tenstorrent/helm-charts/tt-operator \
 Brings up node-feature-discovery + tt-k8s-driver-manager in one release. The
 `tt-k8s-driver-manager.*` block in the umbrella's `values.yaml` is forwarded
 to the subchart unchanged.
-
-## Image-pull setup
-
-`ghcr.io/tenstorrent/*` images are private. You need a
-`kubernetes.io/dockerconfigjson` secret in the install namespace and the
-relevant `ServiceAccount`s patched to use it.
-
-```bash
-# Replace <PAT> with a classic PAT (read:packages scope, SAML-authorized
-# for the tenstorrent org).
-kubectl create secret docker-registry ghcr-pull \
-  --namespace tt-k8s-driver-manager-system \
-  --docker-server=ghcr.io --docker-username=<your-gh-handle> --docker-password=<PAT>
-
-kubectl -n tt-k8s-driver-manager-system patch sa default \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-controller \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-installer \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-
-# Restart the controller so its pod picks the secret up:
-kubectl -n tt-k8s-driver-manager-system rollout restart deploy tt-k8s-driver-manager-controller
-```
-
-The classic-PAT-via-SAML requirement comes from GitHub's enterprise SSO
-policy on the org, not from this operator.
 
 ## NFD setup
 
@@ -123,15 +94,15 @@ Then check NFD labelled your Tenstorrent nodes:
 ```bash
 $ kubectl get nodes -L feature.node.kubernetes.io/pci-1200_1e52.present
 NAME      STATUS   PRESENT
-e01cs01   Ready    true
-e01cs02   Ready    true
-e01cs03   Ready    true
+node-1   Ready    true
+node-2   Ready    true
+node-3   Ready    true
 ```
 
 If `PRESENT` is empty on a node that has a Tenstorrent card, NFD isn't
 seeing the device — check the NFD worker pod's logs on that node.
 
-Apply a CR to actually install the driver — see [docs/driver.md](driver.md).
+Apply a CR to actually install the driver — see [Driver Management](driver.md).
 
 ## Uninstall
 
@@ -152,4 +123,4 @@ What it does NOT remove (intentional):
 - Any state on the hosts: `/var/cache/tt-kmd/*`,
   `/usr/local/bin/tt-smi`. The kernel module stays loaded too. Clean
   these manually if you're tearing down a node — see
-  [docs/troubleshooting.md → fully clean a host](troubleshooting.md#fully-clean-a-host).
+  [Fully clean a host](troubleshooting.md#fully-clean-a-host).

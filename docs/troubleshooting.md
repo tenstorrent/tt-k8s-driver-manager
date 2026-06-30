@@ -6,38 +6,30 @@ symptom you see in `kubectl`, the root cause, and the fix.
 ## ImagePullBackOff on the driver/flasher pods
 
 ```
-NAME                            READY   STATUS             RESTARTS   AGE
-ttdrv-aus2-dev2-default-...     0/1     ImagePullBackOff   0          5m
+NAME                  READY   STATUS             RESTARTS   AGE
+ttdrv-default-...     0/1     ImagePullBackOff   0          5m
 ```
-
-`ghcr.io/tenstorrent/*` images are private. The pod's ServiceAccount
-needs `imagePullSecrets` pointing at a `kubernetes.io/dockerconfigjson`
-secret in the same namespace.
 
 ```bash
 $ kubectl -n tt-k8s-driver-manager-system describe pod ttdrv-...
-... Failed to pull image ... 401 Unauthorized ...
+... Failed to pull image ... HTTP 4xx / network unreachable ...
 ```
 
-Fix:
+Image registries are public, so this is almost always one of:
 
-```bash
-kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-installer \
-  --type merge -p '{"imagePullSecrets":[{"name":"ghcr-pull"}]}'
-kubectl -n tt-k8s-driver-manager-system delete pod -l app.kubernetes.io/component=driver
-```
-
-(Replace `tt-k8s-driver-manager-installer` with whatever Helm gave it —
-`kubectl -n tt-k8s-driver-manager-system get sa | grep installer`.)
-
-The `ghcr-pull` secret must contain a PAT with `read:packages` scope,
-SAML-authorized for the `tenstorrent` org. See
-[Install → image-pull setup](install.md#image-pull-setup).
+- **Egress blocked** to `ghcr.io` or `pkg-containers.githubusercontent.com`.
+  Check your cluster's proxy / firewall allowlist.
+- **Wrong image tag** in the policy or chart values — `docker pull
+  <image>:<tag>` from a workstation to confirm the tag exists.
+- **Pull secret left over** from a previous private-registry setup that
+  no longer authenticates. Drop the secret from the ServiceAccount:
+  `kubectl -n tt-k8s-driver-manager-system patch sa tt-k8s-driver-manager-installer
+  --type=json -p='[{"op":"remove","path":"/imagePullSecrets"}]'`.
 
 ## "Pod is in use; cannot reinstall" — refcnt > 0
 
 ```
-$ kubectl -n tt-k8s-driver-manager-system logs ttdrv-aus2-dev2-default-...
+$ kubectl -n tt-k8s-driver-manager-system logs ttdrv-default-...
 ERROR: tt-kmd 2.7.0 loaded with refcnt > 0; cannot reinstall 2.8.0
 Holders: 12345 23456
 Drain workloads holding /dev/tenstorrent and let the next reconcile retry.
@@ -125,7 +117,7 @@ kubectl -n tt-k8s-driver-manager-system delete pod -l app.kubernetes.io/componen
 ```bash
 $ kubectl get nodes -L feature.node.kubernetes.io/pci-1200_1e52.present
 NAME      STATUS   PRESENT
-e01cs01   Ready
+node-1   Ready
 ```
 
 (empty, but the node has a Tenstorrent card)
@@ -157,7 +149,7 @@ on dev nodes. There's a `hack/dev/label-fake-tt-nodes.yaml` for kind.
 
 ```bash
 $ kubectl -n tt-k8s-driver-manager-system get pod -l app.kubernetes.io/component=driver
-ttdrv-aus2-dev2-default-...   0/1     Running   0   30s
+ttdrv-default-...   0/1     Running   0   30s
 ```
 
 Pod's readiness probe checks `/sys/module/tenstorrent/version ==
@@ -173,12 +165,12 @@ wants:
 Check the pod's logs for the actual error. Then either drain
 workloads (refcnt → 0) or reboot the host.
 
-## Host has tt-kmd from tt-ansible; operator ignored it
+## Host has tt-kmd from DKMS/apt; operator ignored it
 
 ```bash
-$ kubectl get node e01cs03 -L driver.tenstorrent.com/install-mode
-NAME      INSTALL-MODE
-e01cs03   host
+$ kubectl get node node-1 -L driver.tenstorrent.com/install-mode
+NAME     INSTALL-MODE
+node-1   host
 ```
 
 Expected, not a bug. The builder pod detected `/var/lib/dkms/tenstorrent`
@@ -186,7 +178,7 @@ or `/usr/src/tenstorrent-<v>/dkms.conf` and stood down. The host's
 tt-kmd stays, the operator doesn't `rmmod` or rebuild.
 
 If you want the operator to take over, follow
-[docs/migrating-from-dkms.md](migrating-from-dkms.md) — it has the
+[Migrating from DKMS](migrating-from-dkms.md) — it has the
 per-node vacate script, the cluster-side cordon/drain coordination, and
 the watch-outs (both DKMS signal dirs, refcnt > 0, proxied builder).
 
@@ -215,6 +207,122 @@ the hosts' Ubuntu release and push. Mixed-OS fleets need one builder
 image (and so one `TenstorrentDriverPolicy` with a matching
 `nodeAffinity`) per Ubuntu release.
 
+## Builder pod can't clone tt-kmd — proxy / DNS
+
+```
+$ kubectl -n tt-k8s-driver-manager-system logs ttdrv-default-...
+fatal: unable to access 'https://github.com/tenstorrent/tt-kmd.git/':
+  Could not resolve host: github.com
+```
+
+Builder pod has no network path to GitHub for the cache-miss clone.
+Common when pod egress goes through a proxy (CI behind squid, isolated
+clusters) and `HTTPS_PROXY` isn't set on the builder.
+
+The controller propagates its own `HTTPS_PROXY` / `HTTP_PROXY` /
+`NO_PROXY` env to spawned builder pods, so the fix is usually on the
+controller side. Check that the controller pod itself has the proxy
+env set:
+
+```bash
+kubectl -n tt-k8s-driver-manager-system get deploy \
+  tt-k8s-driver-manager-controller -o jsonpath='{.spec.template.spec.containers[0].env}' \
+  | jq '.[] | select(.name | test("PROXY"))'
+```
+
+If empty, set via Helm:
+
+```bash
+helm upgrade tt-k8s-driver-manager ... \
+  --set controller.extraEnv[0].name=HTTPS_PROXY \
+  --set controller.extraEnv[0].value=http://proxy.internal:3128 \
+  --set controller.extraEnv[1].name=NO_PROXY \
+  --set controller.extraEnv[1].value=10.0.0.0/8,.svc,.svc.cluster.local
+```
+
+The controller restart re-templates the builder DaemonSet with the
+new env; existing pods need a delete to re-roll.
+
+## Policy never matches — `MessageExternalCordon` on the CR
+
+```bash
+$ kubectl describe ttfp <name>
+...
+Status:
+  Per Node:
+    Name:     node-1
+    State:    Pending
+    Message:  node is cordoned but not by this operator
+```
+
+The node has `spec.unschedulable: true` but no
+`firmware.tenstorrent.com/cordoned-by=<policy-name>` (or the driver
+equivalent `driver.tenstorrent.com/cordoned-by`) annotation. The
+controller refuses to flash a node it didn't cordon itself — protects
+SREs who've taken nodes out of rotation for unrelated reasons.
+
+Either uncordon and let the controller cordon it itself:
+
+```bash
+kubectl uncordon <node>
+```
+
+…or claim the existing cordon by stamping the annotation:
+
+```bash
+kubectl annotate node <node> \
+  firmware.tenstorrent.com/cordoned-by=<policy-name>
+```
+
+(Same pattern for driver policies, with `driver.tenstorrent.com/cordoned-by`.)
+
+Alternative: set `upgradePolicy.drain.enable: false` on the CR to skip
+the cordon gate entirely — flash Job will land via its universal
+toleration regardless of cordon state. Loses the device-pod-eviction
+safety.
+
+## Flash didn't re-run after editing `spec.flasher.image`
+
+You bumped `TenstorrentFirmwarePolicy.spec.flasher.image` (or
+`forceWrite`, `imagePullPolicy`, etc.) and the controller did nothing.
+
+Known limitation:
+the per-node flash Job name is hashed on `(CR name, node name, kmd
+version)`. The flasher fields are NOT in the hash. If a Job already
+exists at that name with `Completed` status, the controller treats
+the node as Done.
+
+Workarounds until #42 ships a fix:
+- Bump `spec.version` (forces a new Job name).
+- Delete the per-node Job:
+  `kubectl -n tt-k8s-driver-manager-system delete job -l driver.tenstorrent.com/cr=<name>,driver.tenstorrent.com/node=<node>`.
+- Wait out the 24h Job TTL — the next reconcile will spawn a fresh
+  Job that picks up the new flasher fields.
+
+## Multiple policies match the same node — `MessageNodeConflict`
+
+```bash
+$ kubectl describe ttfp <name>
+...
+    Message:  node is also matched by another firmware policy
+```
+
+Two `TenstorrentFirmwarePolicy` (or two `TenstorrentDriverPolicy`) CRs
+have `nodeSelector` overlap. Controller refuses to flash to avoid
+racing each other.
+
+Find the offenders:
+
+```bash
+kubectl get ttfp -o json | jq -r '
+  .items[] | {name: .metadata.name, selector: .spec.nodeSelector}'
+```
+
+Narrow one selector so each node matches exactly one CR. Typical
+mistake: a "wildcard" CR (empty `nodeSelector`) sitting next to a
+team-scoped CR. Add a `matchExpressions` `NotIn` on the wildcard or
+delete it.
+
 ## CR keeps re-flashing despite node being at the right version
 
 The firmware controller's "this node is done" signal is a `Complete`
@@ -240,8 +348,9 @@ should be making this impossible.
 
 ## Fully clean a host
 
-When a node has been managed by both this operator and tt-ansible (or
-earlier non-container installer pods) and you want to start fresh:
+When a node has been managed by both this operator and a host-side
+DKMS installer (or earlier non-container installer pods) and you want
+to start fresh:
 
 ```bash
 # As root on the node:
@@ -260,8 +369,7 @@ After reboot, the host should have no trace of tt-kmd, and the
 builder pod will fall through to its build path on first reconcile.
 
 This can also be scripted via `kubectl debug node/<n> --profile=sysadmin
--- chroot /host bash -c '<script>'` so you don't need SSH access — see
-the aus2-dev2 deploy log in tt-operator for the exact commands.
+-- chroot /host bash -c '<script>'` so you don't need SSH access.
 
 ## When all else fails
 

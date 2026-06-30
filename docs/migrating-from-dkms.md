@@ -1,8 +1,9 @@
 # Migrating from DKMS-managed to operator-managed tt-kmd
 
-Most production Tenstorrent clusters today install `tt-kmd` per-host via
-DKMS (typically through `tt-ansible`'s `tt_kmd` role). When driver-manager
-lands on those nodes it detects the DKMS state and stays out of the way —
+Many production Tenstorrent clusters today install `tt-kmd` per-host via
+DKMS (typically through a host-side config-management tool). When
+driver-manager lands on those nodes it detects the DKMS state and stays
+out of the way —
 the node is labelled `driver.tenstorrent.com/install-mode=host` and the
 builder DaemonSet idles. This guide is for cluster operators who want to
 switch a fleet (or one node at a time) from that host-managed mode to
@@ -36,7 +37,7 @@ label:
 
 | Mode | Label | Who owns kmd | When it's set |
 |---|---|---|---|
-| **Host-managed** | `driver.tenstorrent.com/install-mode=host` | Sysadmin via DKMS (apt / `tt-ansible` / manual `dkms install`) | Builder pod sees DKMS signals on the host and idles. |
+| **Host-managed** | `driver.tenstorrent.com/install-mode=host` | Sysadmin via DKMS (apt / config-management tool / manual `dkms install`) | Builder pod sees DKMS signals on the host and idles. |
 | **Container-managed** | `driver.tenstorrent.com/install-mode=container` | Operator: builder pod compiles tt-kmd from source, `insmod`s, manages version per the CR | Builder pod sees no DKMS signals, falls through to its build path. |
 
 The operator never tries to "convert" a host from one mode to the other.
@@ -54,7 +55,7 @@ The builder pod checks two paths on the host filesystem at start-up:
 If **either** exists, the node is treated as host-managed and the builder
 idles. Both must be gone for the builder to fall through to its build
 path. This is the same check documented in
-[driver.md → Mixed mode](driver.md#mixed-mode).
+[Mixed mode](driver.md#mixed-mode).
 
 ## Per-node vacate procedure
 
@@ -106,7 +107,7 @@ for production; the script tears down the running kmd, so the node
 briefly has no `/dev/tenstorrent`.
 
 ```bash
-NODE=e01cs01
+NODE=node-1
 
 # 1. Cordon and drain device-holding workloads (and anything else
 #    on the node). Adjust the selector to match how your workloads
@@ -171,7 +172,7 @@ spec:
   version: "2.8.0"                      # whatever DKMS was pinning, or the version you want to land on
   nodeAffinity:
     matchLabels:
-      kubernetes.io/hostname: e01cs01   # one node only for the first cut
+      kubernetes.io/hostname: node-1   # one node only for the first cut
   paused: true                          # flip to false after the vacate
   upgradePolicy:
     drain:
@@ -184,7 +185,7 @@ kubectl patch ttdp migration-test --type merge -p '{"spec":{"paused":false}}'
 ```
 
 Once this single-node migration is clean, widen `nodeAffinity` (or apply
-a fleet-scoped CR like the one in [driver.md → Whole-fleet install](driver.md#whole-fleet-install))
+a fleet-scoped CR like the one in [Whole-fleet install](driver.md#whole-fleet-install))
 and migrate the rest of the fleet one node at a time.
 
 ## Watch-outs
@@ -198,11 +199,10 @@ and migrate the rest of the fleet one node at a time.
   `find -delete` somewhere under `/lib/modules/$(uname -r)`. Locate
   with `find /lib/modules/$(uname -r) -name 'tenstorrent.ko*'` and
   delete by hand, then re-run `depmod -a`.
-- **Image-pull and proxy.** The builder pod pulls
+- **Proxy.** The builder pod pulls
   `ghcr.io/tenstorrent/tt-k8s-driver-manager-builder` and `git clone`s
   tt-kmd from `github.com`. In proxied clusters, set the
-  `controller.extraEnv` chart value (added in
-  [#31](https://github.com/tenstorrent/tt-k8s-driver-manager/pull/31))
+  `controller.extraEnv` chart value
   to propagate `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` from the
   controller into the spawned builder pod — without that the builder
   hangs on the git clone.
@@ -247,14 +247,10 @@ driver.tenstorrent.com/skip=true`.
 
 ## See also
 
-- [driver.md → Mixed mode](driver.md#mixed-mode) — the detection logic
+- [Mixed mode](driver.md#mixed-mode) — the detection logic
   from the operator's side.
-- [troubleshooting.md → Fully clean a host](troubleshooting.md#fully-clean-a-host)
+- [Fully clean a host](troubleshooting.md#fully-clean-a-host)
   — a broader sweep that also clears operator-side state (cache,
   tt-smi, etc.); the vacate script above is the DKMS-only subset.
-- [`controller.extraEnv`](../charts/tt-k8s-driver-manager/README.md) —
-  proxy env propagation to spawned builder pods (PR
-  [#31](https://github.com/tenstorrent/tt-k8s-driver-manager/pull/31)).
-- [tt-operator integration test](https://github.com/tenstorrent/tt-operator/blob/main/.github/workflows/integration-rke2.yaml)
-  — exercises the vacate-and-rebuild sequence in CI on a single-node
-  N150 runner; canonical reference for the exact shell commands.
+- [`controller.extraEnv`](configuration.md) —
+  proxy env propagation to spawned builder pods.
