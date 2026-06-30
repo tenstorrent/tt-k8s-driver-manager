@@ -40,7 +40,7 @@
 controller:
   image:
     # -- Controller image repository.
-    repository: ghcr.io/tenstorrent/tt-k8s-driver-manager-controller
+    repository: ghcr.io/tenstorrent/tt-k8s-driver-manager
     # -- Controller image tag; falls back to .Chart.AppVersion when empty.
     tag: ""
     # -- Controller image pull policy.

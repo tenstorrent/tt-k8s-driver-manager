@@ -1,7 +1,7 @@
 # tt-k8s-driver-manager development targets.
 
 CONTROLLER_GEN  ?= $(shell go env GOPATH)/bin/controller-gen
-CONTROLLER_IMG  ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-controller:dev
+CONTROLLER_IMG  ?= ghcr.io/tenstorrent/tt-k8s-driver-manager:dev
 BUILDER_IMG     ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:dev
 FLASHER_IMG     ?= ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher:dev
 PLATFORMS       ?= linux/amd64
