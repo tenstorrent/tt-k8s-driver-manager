@@ -289,31 +289,6 @@ the cordon gate entirely — flash Job will land via its universal
 toleration regardless of cordon state. Loses the device-pod-eviction
 safety.
 
-## `helm install` fails on jobsets.jobset.x-k8s.io CRD CEL rule
-
-```
-Helm install failed for release ...: failed to apply CustomResourceDefinitions:
-  CustomResourceDefinition.apiextensions.k8s.io "jobsets.jobset.x-k8s.io" is invalid:
-  spec.validation.openAPIV3Schema...x-kubernetes-validations[0].rule:
-  Invalid value: ... compilation failed: ERROR: <input>:1:27: undefined field 'namespace'
-```
-
-The upstream JobSet v0.12.0 CRD carries a CEL validation rule that
-references `t.metadata.namespace` on an embedded ObjectMeta type.
-Kubernetes apiservers before 1.30 are stricter about CEL field
-resolution and refuse to compile the rule.
-
-This is a tt-operator umbrella issue, not driver-manager — but it
-blocks driver-manager installs that go through the umbrella. Either:
-
-- Bump the umbrella chart to ≥ v0.0.4 (gates the JobSet CRD on
-  `jobset.enabled` and skips it when not needed).
-- Disable JobSet at the site: `--set jobset.enabled=false` (only
-  helps on umbrella ≥ v0.0.4; earlier umbrella versions ship the CRD
-  unconditionally).
-- Upgrade the apiserver to ≥ 1.30 if other workloads on this cluster
-  legitimately need JobSet.
-
 ## Flash didn't re-run after editing `spec.flasher.image`
 
 You bumped `TenstorrentFirmwarePolicy.spec.flasher.image` (or
