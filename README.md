@@ -180,7 +180,7 @@ helm template charts/tt-k8s-driver-manager   # render chart locally
 **Images** (linux/amd64; on arm64 push a branch and let GHA build):
 
 ```bash
-make controller-image    # ghcr.io/.../tt-k8s-driver-manager-controller:dev
+make controller-image    # ghcr.io/.../tt-k8s-driver-manager:dev
 make tools-image         # ghcr.io/.../tt-k8s-driver-manager-tools:dev
 make helm-install        # deploy :dev images to the current kube context
 ```

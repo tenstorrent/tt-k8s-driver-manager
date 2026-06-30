@@ -1,7 +1,7 @@
 name: images
 
 # Builds and pushes the two container images this repo produces:
-#   - controller: ghcr.io/tenstorrent/tt-k8s-driver-manager-controller
+#   - controller: ghcr.io/tenstorrent/tt-k8s-driver-manager
 #                 (slim Go binary on distroless)
 #   - tools:      ghcr.io/tenstorrent/tt-k8s-driver-manager-tools
 #                 (single privileged image, multi-mode entrypoint:
@@ -38,7 +38,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  CONTROLLER_IMAGE: ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-controller
+  CONTROLLER_IMAGE: ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager
   TOOLS_IMAGE:      ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-tools
 
 jobs:
