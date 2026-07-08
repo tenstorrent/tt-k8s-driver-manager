@@ -6,9 +6,10 @@ const (
 	// Accelerator), vendor 1e52 (Tenstorrent). NFD emits this automatically.
 	LabelTenstorrentPresent = "feature.node.kubernetes.io/pci-1200_1e52.present"
 
-	// LabelKMDVersion is the per-node label set by the driver controller
-	// when an installer pod transitions to Ready (i.e. /sys/module reports
-	// the expected version).
+	// LabelKMDVersion is the per-node label set by the builder pod's
+	// entrypoint from the actual loaded module version
+	// (/sys/module/tenstorrent/version). Cleared by the controller when
+	// no Ready installer pod is present on the node.
 	LabelKMDVersion = "driver.tenstorrent.com/kmd-version"
 
 	// LabelDriverSkip opts a node out of driver reconciliation. Mirrors

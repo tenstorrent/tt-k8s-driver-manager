@@ -125,13 +125,14 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	// Sync per-node kmd-version labels based on actual pod readiness. The
-	// label is what workloads / dashboards / Prometheus read; pod-Ready
-	// is the ground-truth signal (readiness probe in buildDaemonSet
-	// checks /sys/module/tenstorrent/version against the desired version).
+	// Clean up per-node kmd-version labels for pods that are missing or
+	// NotReady. The Ready-write path is owned by the entrypoint (which
+	// self-labels with the *actual* loaded version — see
+	// images/driver-build/entrypoint.sh); the controller only handles
+	// removal so labels don't linger after a pod goes away.
 	if existing != nil {
-		if err := r.syncKMDVersionLabels(ctx, cr, existing); err != nil {
-			logger.Error(err, "sync kmd-version labels")
+		if err := r.cleanupKMDVersionLabels(ctx, cr, existing); err != nil {
+			logger.Error(err, "cleanup kmd-version labels")
 		}
 	}
 
@@ -151,12 +152,16 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
-// syncKMDVersionLabels writes `driver.tenstorrent.com/kmd-version=<v>` on
-// nodes whose installer pod is currently Ready, and removes the label on
-// nodes whose pod is NotReady (or gone). Pod-Ready is wired to a probe
-// that checks /sys/module/tenstorrent/version, so this label is honest
-// about the kernel's actual state.
-func (r *DriverPolicyReconciler) syncKMDVersionLabels(
+// cleanupKMDVersionLabels removes `driver.tenstorrent.com/kmd-version`
+// from nodes whose installer pod is NotReady or gone. The write path
+// (setting the label to the actual loaded kmd version) is owned by the
+// entrypoint's label_node calls — see images/driver-build/entrypoint.sh.
+// Splitting write/cleanup between the entrypoint and the controller
+// means the label reflects the kernel's real state (which the entrypoint
+// reads from /sys/module/tenstorrent/version) rather than the CR's
+// desired state, which matters for host-managed nodes whose host kmd
+// can legitimately differ from cr.Spec.Version.
+func (r *DriverPolicyReconciler) cleanupKMDVersionLabels(
 	ctx context.Context, cr *driverv1alpha1.TenstorrentDriverPolicy, ds *appsv1.DaemonSet,
 ) error {
 	var pods corev1.PodList
@@ -173,17 +178,6 @@ func (r *DriverPolicyReconciler) syncKMDVersionLabels(
 		if nodeName == "" {
 			continue
 		}
-		// The version this pod was templated with — NOT cr.Spec.Version.
-		// During a DS rollout the old pods keep running with their old
-		// env vars; their probes are passing against the OLD version (the
-		// kernel hasn't been touched yet). Writing cr.Spec.Version here
-		// would have us say "kmd=2.8.0 on this node" the instant the spec
-		// flipped from 2.7.0→2.8.0, even though the kernel still has 2.7.0.
-		// Read the truth from the pod's own env.
-		podVersion := podEnv(p, "TT_KMD_VERSION")
-		if podVersion == "" {
-			continue
-		}
 		ready := false
 		for _, cond := range p.Status.Conditions {
 			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
@@ -191,31 +185,20 @@ func (r *DriverPolicyReconciler) syncKMDVersionLabels(
 				break
 			}
 		}
-
-		node := &corev1.Node{}
-		if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
-			// Node went away or transient — skip; next reconcile retries.
+		if ready {
 			continue
 		}
 
-		patch := client.MergeFrom(node.DeepCopy())
-		cur := node.Labels[LabelKMDVersion]
-		if ready {
-			if cur == podVersion {
-				continue
-			}
-			if node.Labels == nil {
-				node.Labels = map[string]string{}
-			}
-			node.Labels[LabelKMDVersion] = podVersion
-		} else {
-			if cur == "" {
-				continue
-			}
-			delete(node.Labels, LabelKMDVersion)
+		node := &corev1.Node{}
+		if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+			continue
 		}
+		if node.Labels[LabelKMDVersion] == "" {
+			continue
+		}
+		patch := client.MergeFrom(node.DeepCopy())
+		delete(node.Labels, LabelKMDVersion)
 		if err := r.Patch(ctx, node, patch); err != nil {
-			// Don't fail the whole reconcile on a single label patch error.
 			continue
 		}
 	}
@@ -616,16 +599,17 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							{Name: "host-udev-rules", MountPath: "/host/etc/udev/rules.d"},
 							{Name: "host-dev", MountPath: "/host/dev"},
 						},
-						// Pod is Ready iff /sys/module reports the desired
-						// version. The container has its own sysfs mount but
-						// kernel state is shared, so no nsenter is needed.
+						// Pod is Ready when the entrypoint reaches its
+						// terminal idle state (any of the three modes;
+						// see images/driver-build/entrypoint.sh). A
+						// version-match probe would falsely reject
+						// host-managed pods whose host runs a different
+						// kmd version than the CR's TT_KMD_VERSION —
+						// they've legitimately stood down and idled.
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								Exec: &corev1.ExecAction{
-									Command: []string{
-										"sh", "-c",
-										`cat /sys/module/tenstorrent/version 2>/dev/null | grep -qFx "$TT_KMD_VERSION"`,
-									},
+									Command: []string{"test", "-f", "/tmp/ready"},
 								},
 							},
 							InitialDelaySeconds: 5,
