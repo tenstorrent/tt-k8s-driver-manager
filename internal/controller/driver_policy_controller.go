@@ -545,7 +545,16 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 			UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
 				Type: appsv1.RollingUpdateDaemonSetStrategyType,
 				RollingUpdate: &appsv1.RollingUpdateDaemonSet{
-					MaxUnavailable: intStrPtr(1),
+					// 25% (percent, not count) so a single stuck pod
+					// doesn't consume the entire rollout budget on a
+					// large fleet, and image-only bumps (kmd unchanged
+					// → entrypoint hits the match branch → idle) can
+					// parallelize. Disruptive kmd-version upgrades are
+					// still serialized at the CR level by the drain
+					// flow (prepareUpgrade / drainEnabledForCR), which
+					// is where the actual "don't rmmod under a live
+					// workload" safety lives.
+					MaxUnavailable: intStrStrPtr("25%"),
 				},
 			},
 			Selector: &metav1.LabelSelector{MatchLabels: podLabels},
@@ -686,8 +695,8 @@ func labelSelectorToExpressions(sel metav1.LabelSelector) []corev1.NodeSelectorR
 	return out
 }
 
-func intStrPtr(i int) *intstr.IntOrString {
-	v := intstr.FromInt(i)
+func intStrStrPtr(s string) *intstr.IntOrString {
+	v := intstr.FromString(s)
 	return &v
 }
 
