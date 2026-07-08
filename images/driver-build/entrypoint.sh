@@ -13,6 +13,12 @@
 #
 #   3. CONTAINER-MANAGED, mismatch — rmmod (refcnt=0 required), build
 #      from cache or clone+make, insmod, idle.
+#
+# Each terminal path touches $READY_MARKER before sleeping so the
+# controller's readinessProbe (test -f $READY_MARKER) flips the pod
+# Ready. That's mode-neutral: a host-managed pod on a host running an
+# older kmd is still legitimately "done from the operator's POV," and
+# the file marker reflects that.
 set -eu
 
 MODULE=tenstorrent
@@ -22,6 +28,7 @@ CACHE_DIR="/var/cache/tt-kmd/${KVER}/${EXPECTED}"
 KO_PATH="${CACHE_DIR}/${MODULE}.ko"
 UDEV_BUNDLED_PATH="/usr/local/share/tt-k8s-driver-manager/udev-50-tenstorrent.rules"
 UDEV_HOST_PATH="/host/etc/udev/rules.d/50-tenstorrent.rules"
+READY_MARKER=/tmp/ready
 
 API="https://kubernetes.default.svc"
 TOKEN_PATH="/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -37,9 +44,9 @@ refcnt() {
 
 # label_node sets a single label on $NODE_NAME via the Kubernetes API.
 # Falls back to no-op (with a log warning) if the SA token isn't mounted
-# or curl/curl returns non-2xx — kmd-version label sync still works via
-# the controller, so a node-patch failure here just means the
-# install-mode label is missing; not fatal.
+# or curl returns non-2xx. Best-effort: the pod still reaches Ready via
+# the file marker on /tmp/ready even if this call fails, so a stale
+# label is the worst outcome.
 label_node() {
     KEY=$1
     VAL=$2
@@ -136,10 +143,12 @@ if host_install_detected; then
     LOADED=$(loaded_version)
     if [ -n "$LOADED" ]; then
         echo "tt-kmd ${LOADED} loaded by host; idling"
+        label_node "driver.tenstorrent.com/kmd-version" "$LOADED"
     else
         echo "no tt-kmd loaded yet; the host is expected to load it (kmd-version label will follow)"
     fi
     # Skip tt-smi install — host is expected to manage it too.
+    touch "$READY_MARKER"
     exec sleep infinity
 fi
 
@@ -149,8 +158,10 @@ LOADED=$(loaded_version)
 if [ "$LOADED" = "$EXPECTED" ]; then
     echo "tt-kmd ${LOADED} matches TT_KMD_VERSION on kernel ${KVER}; idling"
     label_node "driver.tenstorrent.com/install-mode" "container"
+    label_node "driver.tenstorrent.com/kmd-version" "$LOADED"
     install_tt_smi
     install_udev_rule
+    touch "$READY_MARKER"
     exec sleep infinity
 fi
 
@@ -239,7 +250,9 @@ if [ "$LOADED" != "$EXPECTED" ]; then
 fi
 
 label_node "driver.tenstorrent.com/install-mode" "container"
+label_node "driver.tenstorrent.com/kmd-version" "$LOADED"
 install_tt_smi
 install_udev_rule
 echo "tt-kmd ${LOADED} loaded on kernel ${KVER}; idling"
+touch "$READY_MARKER"
 exec sleep infinity
