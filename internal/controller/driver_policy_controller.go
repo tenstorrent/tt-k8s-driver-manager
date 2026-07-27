@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	driverv1alpha1 "github.com/tenstorrent/tt-k8s-driver-manager/api/driver/v1alpha1"
+	"github.com/tenstorrent/tt-k8s-driver-manager/internal/metrics"
 )
 
 // dsTemplateHashAnnotation tracks the rendered pod template across
@@ -58,11 +59,15 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	cr := &driverv1alpha1.TenstorrentDriverPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
 		if apierrors.IsNotFound(err) {
+			// Drop the CR's series rather than leaving gauges describing a
+			// rollout that no longer exists.
+			metrics.DeleteDriverPolicySeries(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 	if !cr.DeletionTimestamp.IsZero() {
+		metrics.DeleteDriverPolicySeries(cr.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -70,6 +75,7 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// what actually schedules pods; this is just for the summary.
 	matched, err := r.countMatchedNodes(ctx, cr)
 	if err != nil {
+		metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "count_matched_nodes").Inc()
 		return ctrl.Result{}, fmt.Errorf("count matched nodes: %w", err)
 	}
 
@@ -82,14 +88,22 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	case apierrors.IsNotFound(err):
 		if cr.Spec.Paused {
 			logger.Info("paused; skipping DaemonSet creation")
+			// Paused is a deliberate steady state, not a stall — stamp the
+			// freshness gauge so a long pause doesn't read as a wedged
+			// controller.
+			metrics.DriverReconcileSucceeded(cr.Name)
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.updateStatus(ctx, cr, nil, matched)
 		}
 		if err := r.Create(ctx, desiredDS); err != nil {
+			metrics.DriverDaemonSetOperations.WithLabelValues(cr.Name, metrics.OperationCreate, metrics.ResultError).Inc()
+			metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "create_daemonset").Inc()
 			return ctrl.Result{}, fmt.Errorf("create daemonset: %w", err)
 		}
+		metrics.DriverDaemonSetOperations.WithLabelValues(cr.Name, metrics.OperationCreate, metrics.ResultSuccess).Inc()
 		logger.Info("created tt-kmd DaemonSet", "name", dsName, "version", cr.Spec.Version)
 		existing = desiredDS
 	case err != nil:
+		metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "get_daemonset").Inc()
 		return ctrl.Result{}, fmt.Errorf("get daemonset: %w", err)
 	default:
 		// Update if spec drift (most commonly: version change).
@@ -103,6 +117,7 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			// net.
 			if drainEnabledForCR(cr) {
 				if err := r.prepareUpgrade(ctx, cr); err != nil {
+					metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "prepare_upgrade").Inc()
 					logger.Error(err, "pre-upgrade drain")
 				}
 			}
@@ -112,8 +127,11 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			}
 			existing.Annotations[dsTemplateHashAnnotation] = desiredDS.Annotations[dsTemplateHashAnnotation]
 			if err := r.Update(ctx, existing); err != nil {
+				metrics.DriverDaemonSetOperations.WithLabelValues(cr.Name, metrics.OperationUpdate, metrics.ResultError).Inc()
+				metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "update_daemonset").Inc()
 				return ctrl.Result{}, fmt.Errorf("update daemonset: %w", err)
 			}
+			metrics.DriverDaemonSetOperations.WithLabelValues(cr.Name, metrics.OperationUpdate, metrics.ResultSuccess).Inc()
 			logger.Info("updated tt-kmd DaemonSet", "name", dsName, "version", cr.Spec.Version)
 		}
 	}
@@ -122,6 +140,7 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
+		metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "update_status").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -132,8 +151,17 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// removal so labels don't linger after a pod goes away.
 	if existing != nil {
 		if err := r.cleanupKMDVersionLabels(ctx, cr, existing); err != nil {
+			metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "cleanup_kmd_version_labels").Inc()
 			logger.Error(err, "cleanup kmd-version labels")
 		}
+	}
+
+	// Fleet-wide kmd-version gauge, read straight off the node labels the
+	// builder pods self-report. Best-effort — a failed node List shouldn't
+	// fail a reconcile that already did its real work.
+	if err := r.recordKMDVersionMetrics(ctx); err != nil {
+		metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "record_kmd_version_metrics").Inc()
+		logger.Error(err, "record kmd-version metrics")
 	}
 
 	// Uncordon nodes whose builder pod is Ready against the current
@@ -141,9 +169,12 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// so external cordons are left alone.
 	if drainEnabledForCR(cr) && existing != nil {
 		if err := r.uncordonReadyNodes(ctx, cr, existing); err != nil {
+			metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "uncordon_ready_nodes").Inc()
 			logger.Error(err, "uncordon ready nodes")
 		}
 	}
+
+	metrics.DriverReconcileSucceeded(cr.Name)
 
 	// Requeue while rollout in flight.
 	if existing != nil && existing.Status.NumberReady < existing.Status.DesiredNumberScheduled {
@@ -284,10 +315,14 @@ func (r *DriverPolicyReconciler) updateStatus(
 	// Populate per-node state. Best-effort: errors in computing per-node
 	// state don't block the status update — the summary still goes out.
 	if err := r.populateNodeStatuses(ctx, cr); err != nil {
+		metrics.DriverErrorsTotal.WithLabelValues(cr.Name, "populate_node_statuses").Inc()
 		log.FromContext(ctx).Error(err, "compute per-node status")
 	}
 
 	setDriverConditions(cr)
+	// Publish the per-CR gauges from the same status we're about to write,
+	// so `kubectl get ttdp` and Prometheus can never disagree.
+	recordDriverPolicyMetrics(cr)
 	return r.Status().Update(ctx, cr)
 }
 

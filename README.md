@@ -130,6 +130,7 @@ ownership"), set `driver.tenstorrent.com/skip=true` on the node.
 | [Firmware](docs/firmware.md) | `TenstorrentFirmwarePolicy`, drain config, force-write flag |
 | [Upgrades](docs/upgrades.md) | Rolling-update semantics for tt-kmd, tt-smi, firmware, operator itself |
 | [Migrating from DKMS](docs/migrating-from-dkms.md) | Vacate a DKMS install so the operator can take over kmd lifecycle |
+| [Metrics](docs/metrics.md) | Prometheus endpoint, ServiceMonitor, exported `ttdriver_*` / `ttfw_*` families |
 | [Troubleshooting](docs/troubleshooting.md) | Common failures and how to read the symptoms |
 
 ## Related repos
@@ -155,6 +156,8 @@ internal/controller/
   driver_policy_controller.go   reconcile loop for driver installs + upgrades
   firmware_policy_controller.go reconcile loop for firmware flash jobs
   job.go / labels.go / env.go   shared helpers
+  driver_metrics.go / firmware_metrics.go  metric recording off reconcile state
+internal/metrics/          Prometheus metric definitions (registered with controller-runtime)
 images/driver-build/      Dockerfile + entrypoint for the privileged builder pod
 images/flasher/           Dockerfile for the tt-flash job pod
 charts/tt-k8s-driver-manager/  Helm chart

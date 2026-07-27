@@ -14,6 +14,7 @@ import (
 
 	driverv1alpha1 "github.com/tenstorrent/tt-k8s-driver-manager/api/driver/v1alpha1"
 	"github.com/tenstorrent/tt-k8s-driver-manager/internal/drain"
+	"github.com/tenstorrent/tt-k8s-driver-manager/internal/metrics"
 )
 
 // defaultDriverDeployGates is the fallback list used when the
@@ -212,9 +213,9 @@ func (r *DriverPolicyReconciler) prepareUpgrade(
 			logger.Error(err, "flip deploy gates off", "node", node.Name)
 			// continue — best effort
 		}
-		r.evictMatching(ctx, node.Name, force, drain.PodUsesTenstorrentDevice, "pass1")
+		r.evictMatching(ctx, cr.Name, node.Name, force, drain.PodUsesTenstorrentDevice, metrics.DrainPass1)
 		if runFullNode {
-			r.evictMatching(ctx, node.Name, force, pass2Filter, "pass2")
+			r.evictMatching(ctx, cr.Name, node.Name, force, pass2Filter, metrics.DrainPass2)
 		}
 	}
 	return nil
@@ -222,10 +223,11 @@ func (r *DriverPolicyReconciler) prepareUpgrade(
 
 // evictMatching lists pods on the node matching `filter` and evicts
 // each via the Eviction subresource. Best-effort: PDB blocks and other
-// errors are logged and the loop continues. `passLabel` is just a log
-// tag so pass 1 / pass 2 can be told apart in events.
+// errors are logged and the loop continues. `passLabel` is both a log
+// tag and the `pass` metric label, so pass 1 / pass 2 can be told apart.
 func (r *DriverPolicyReconciler) evictMatching(
 	ctx context.Context,
+	crName string,
 	nodeName string,
 	force bool,
 	filter drain.PodFilter,
@@ -236,6 +238,7 @@ func (r *DriverPolicyReconciler) evictMatching(
 		ctx, r.Client, nodeName, operatorNamespace(), force, filter,
 	)
 	if err != nil {
+		metrics.DriverErrorsTotal.WithLabelValues(crName, "list_pods_for_drain").Inc()
 		logger.Error(err, "list pods for drain", "node", nodeName, "pass", passLabel)
 		return
 	}
@@ -243,13 +246,17 @@ func (r *DriverPolicyReconciler) evictMatching(
 		pod := &pods[j]
 		if err := drain.EvictPod(ctx, r.Client, pod); err != nil {
 			if _, ok := err.(drain.ErrEvictionBlocked); ok {
+				metrics.DriverDrainBlockedTotal.WithLabelValues(crName, passLabel).Inc()
 				logger.Info("eviction blocked by PDB; will retry",
 					"pod", pod.Name, "namespace", pod.Namespace, "pass", passLabel)
 				continue
 			}
+			metrics.DriverErrorsTotal.WithLabelValues(crName, "evict_pod").Inc()
 			logger.Error(err, "evict pod",
 				"pod", pod.Name, "namespace", pod.Namespace, "pass", passLabel)
+			continue
 		}
+		metrics.DriverPodsEvictedTotal.WithLabelValues(crName, passLabel).Inc()
 	}
 }
 
@@ -345,4 +352,3 @@ func (r *DriverPolicyReconciler) uncordonReadyNodes(
 	}
 	return nil
 }
-

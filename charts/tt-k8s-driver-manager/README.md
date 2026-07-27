@@ -25,3 +25,12 @@ Kubernetes: `>=1.27.0-0`
 | flasher.image.repository | string | `"ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher"` | Flasher image repository. |
 | flasher.image.tag | string | `""` | Flasher image tag; falls back to .Chart.AppVersion when empty. |
 | imagePullSecrets | list | `[]` | Pull secrets for the controller + installer ServiceAccounts; inherited by spawned builder/flasher pods. Leave empty for public images. |
+| metrics | object | `{"port":8080,"service":{"enabled":true},"serviceMonitor":{"additionalLabels":{},"enabled":false,"interval":"30s","metricRelabelings":[],"relabelings":[],"scrapeTimeout":"10s"}}` | Prometheus metrics. The controller always serves /metrics on metrics.port; these knobs only control how Prometheus finds it. Exported families are documented in docs/metrics.md — controller-runtime's built-ins plus ttdriver_* / ttfw_* for driver and firmware rollouts. |
+| metrics.port | int | `8080` | Port the controller serves /metrics on (container port and Service port). |
+| metrics.service.enabled | bool | `true` | Create a ClusterIP Service in front of the controller's metrics port. Needed by the ServiceMonitor below, and by pod-annotation-based scrapers. |
+| metrics.serviceMonitor.additionalLabels | object | `{}` | Extra labels on the ServiceMonitor. Set whatever your Prometheus' serviceMonitorSelector matches (kube-prometheus-stack commonly wants `release: <prometheus release name>`), or it is silently ignored. |
+| metrics.serviceMonitor.enabled | bool | `false` | Create a Prometheus Operator ServiceMonitor. Off by default: it needs the monitoring.coreos.com CRD, and the release fails on clusters without one. |
+| metrics.serviceMonitor.interval | string | `"30s"` | Scrape interval. The fleet-wide version gauges only move when a rollout does, so there is no reason to scrape aggressively. |
+| metrics.serviceMonitor.metricRelabelings | list | `[]` | Prometheus metric_relabel_configs applied to scraped samples; the place to drop families you don't want to store. |
+| metrics.serviceMonitor.relabelings | list | `[]` | Prometheus relabel_configs applied to the scrape target. |
+| metrics.serviceMonitor.scrapeTimeout | string | `"10s"` | Scrape timeout; must not exceed the interval. |
