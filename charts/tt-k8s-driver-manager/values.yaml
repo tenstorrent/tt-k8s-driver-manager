@@ -75,6 +75,22 @@ controller:
     requests:
       cpu: 50m
       memory: 64Mi
+  # -- Controller pod affinity. Defaults to preferring nodes without the NFD
+  # Tenstorrent PCI-presence label, keeping the controller off accelerator
+  # nodes. NFD omits the label on non-TT nodes, hence DoesNotExist. Preferred
+  # rather than required so single-node dev clusters still schedule it.
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: feature.node.kubernetes.io/pci-1200_1e52.present
+                operator: DoesNotExist
+  # -- Controller pod nodeSelector.
+  nodeSelector: {}
+  # -- Controller pod tolerations.
+  tolerations: []
 
 # -- Image the controller spawns as the per-node builder DaemonSet pod
 # (builds tt-kmd against host headers, insmods into the host kernel).
