@@ -117,3 +117,34 @@ flasher:
 # -- Pull secrets for the controller + installer ServiceAccounts; inherited
 # by spawned builder/flasher pods. Leave empty for public images.
 imagePullSecrets: []
+
+# -- Prometheus metrics. The controller always serves /metrics on
+# metrics.port; these knobs only control how Prometheus finds it. Exported
+# families are documented in docs/metrics.md — controller-runtime's
+# built-ins plus ttdriver_* / ttfw_* for driver and firmware rollouts.
+metrics:
+  # -- Port the controller serves /metrics on (container port and Service port).
+  port: 8080
+  service:
+    # -- Create a ClusterIP Service in front of the controller's metrics port.
+    # Needed by the ServiceMonitor below, and by pod-annotation-based scrapers.
+    enabled: true
+  serviceMonitor:
+    # -- Create a Prometheus Operator ServiceMonitor. Off by default: it needs
+    # the monitoring.coreos.com CRD, and the release fails on clusters without
+    # one.
+    enabled: false
+    # -- Scrape interval. The fleet-wide version gauges only move when a
+    # rollout does, so there is no reason to scrape aggressively.
+    interval: 30s
+    # -- Scrape timeout; must not exceed the interval.
+    scrapeTimeout: 10s
+    # -- Extra labels on the ServiceMonitor. Set whatever your Prometheus'
+    # serviceMonitorSelector matches (kube-prometheus-stack commonly wants
+    # `release: <prometheus release name>`), or it is silently ignored.
+    additionalLabels: {}
+    # -- Prometheus relabel_configs applied to the scrape target.
+    relabelings: []
+    # -- Prometheus metric_relabel_configs applied to scraped samples; the
+    # place to drop families you don't want to store.
+    metricRelabelings: []

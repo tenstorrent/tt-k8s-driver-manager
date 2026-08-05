@@ -6,7 +6,7 @@ resources. It is one of the components installed by
 [tt-operator](https://docs.tenstorrent.com/tt-operator/).
 
 The guides below cover installing it, applying driver and firmware policies,
-upgrades, migrating from a DKMS-managed driver, and troubleshooting.
+upgrades, migrating from a DKMS-managed driver, metrics, and troubleshooting.
 
 ```{toctree}
 :maxdepth: 1
@@ -16,6 +16,7 @@ driver
 firmware
 upgrades
 migrating-from-dkms
+metrics
 troubleshooting
 configuration
 ```

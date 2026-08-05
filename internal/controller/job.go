@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -123,7 +124,7 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 							Name: "fetch-bundle",
 							// Pin: floating tags lock us into "latest at build time
 							// of the controller" semantics, which surprises people.
-							Image: "curlimages/curl:8.10.1",
+							Image:   "curlimages/curl:8.10.1",
 							Command: []string{"sh", "-c", `curl -fsSL "$TT_FW_BUNDLE_URL" -o /work/bundle.fwbundle`},
 							Env: []corev1.EnvVar{
 								{Name: "TT_FW_BUNDLE_URL", Value: bundleURL},
@@ -188,6 +189,41 @@ func jobFinished(job *batchv1.Job) (bool, bool) {
 		}
 	}
 	return false, false
+}
+
+// flashJobDuration returns the wall time of a finished flash Job, taken
+// from the Job's own timestamps so it survives controller restarts mid-
+// flash. Failed Jobs have no CompletionTime, so the terminal condition's
+// LastTransitionTime stands in. Returns ok=false when the Job never
+// started, or when the clocks give us a non-positive interval (a
+// zero-length flash is a bad sample, not a fast one).
+func flashJobDuration(job *batchv1.Job) (time.Duration, bool) {
+	if job.Status.StartTime == nil {
+		return 0, false
+	}
+	end := job.Status.CompletionTime
+	if end == nil {
+		for i := range job.Status.Conditions {
+			c := &job.Status.Conditions[i]
+			if c.Status != corev1.ConditionTrue {
+				continue
+			}
+			switch c.Type {
+			case batchv1.JobComplete, batchv1.JobFailed, batchv1.JobSuccessCriteriaMet:
+				if end == nil || c.LastTransitionTime.After(end.Time) {
+					end = c.LastTransitionTime.DeepCopy()
+				}
+			}
+		}
+	}
+	if end == nil {
+		return 0, false
+	}
+	d := end.Sub(job.Status.StartTime.Time)
+	if d <= 0 {
+		return 0, false
+	}
+	return d, true
 }
 
 // setOwnerRef attaches the CR as owner so Job GC follows CR deletion.

@@ -1,0 +1,25 @@
+{{- if .Values.metrics.service.enabled }}
+# Scrape target for the controller's Prometheus endpoint. The controller
+# exports fleet-wide gauges (nodes by kmd / firmware version) alongside the
+# usual controller-runtime metrics, so there is exactly one useful target
+# even though the Deployment can run more than one replica — the non-leader
+# replicas idle and report zeros.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tt-k8s-driver-manager.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tt-k8s-driver-manager.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "tt-k8s-driver-manager.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+  ports:
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

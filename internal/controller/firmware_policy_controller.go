@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	firmwarev1alpha1 "github.com/tenstorrent/tt-k8s-driver-manager/api/firmware/v1alpha1"
+	"github.com/tenstorrent/tt-k8s-driver-manager/internal/metrics"
 )
 
 // FirmwarePolicyReconciler reconciles TenstorrentFirmwarePolicy resources.
@@ -50,17 +51,24 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	cr := &firmwarev1alpha1.TenstorrentFirmwarePolicy{}
 	if err := r.Get(ctx, req.NamespacedName, cr); err != nil {
 		if apierrors.IsNotFound(err) {
+			// Drop the CR's series + dedup history rather than leaving
+			// gauges describing a rollout that no longer exists.
+			metrics.DeleteFirmwarePolicySeries(req.Name)
+			firmwareEvents.Forget(req.Name)
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
 	if !cr.DeletionTimestamp.IsZero() {
+		metrics.DeleteFirmwarePolicySeries(cr.Name)
+		firmwareEvents.Forget(cr.Name)
 		return ctrl.Result{}, nil
 	}
 
 	matched, err := r.matchedNodes(ctx, cr)
 	if err != nil {
+		metrics.FirmwareErrorsTotal.WithLabelValues(cr.Name, "list_matched_nodes").Inc()
 		return ctrl.Result{}, fmt.Errorf("list matched nodes: %w", err)
 	}
 
@@ -113,10 +121,16 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// even if a previous reconcile created a Job but failed before recording
 	// it in node state, or if observed state is otherwise out of sync. This
 	// is the source of truth for "how many slots are currently consumed."
-	inFlight, err := r.countInFlightJobs(ctx, cr)
+	jobs, err := r.jobsForCR(ctx, cr)
 	if err != nil {
+		metrics.FirmwareErrorsTotal.WithLabelValues(cr.Name, "list_jobs").Inc()
 		return ctrl.Result{}, fmt.Errorf("count in-flight jobs: %w", err)
 	}
+	inFlight := countInFlightJobs(jobs)
+	metrics.FirmwareFlashJobsInFlight.WithLabelValues(cr.Name).Set(float64(inFlight))
+	// Terminal flash outcomes come off this same listing — no extra API
+	// call, and the Job objects carry the timestamps the histogram needs.
+	dedupKeys := recordFlashJobMetrics(cr.Name, jobs)
 
 	// Second pass: advance up to (maxParallel - inFlight) nodes through
 	// the next state transition. Advanceable states (per isAdvanceable):
@@ -208,6 +222,13 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Sort for stable status output.
 	sort.Slice(nodeStates, func(i, j int) bool { return nodeStates[i].Name < nodeStates[j].Name })
 
+	// Publish the per-CR gauges from the states we're about to write to
+	// status, then prune the dedup history to what cluster state still
+	// backs: existing Jobs and nodes still past their drain deadline.
+	recordFirmwarePolicyMetrics(cr, nodeStates)
+	dedupKeys = append(dedupKeys, recordDrainTimeoutMetrics(cr.Name, nodeStates)...)
+	firmwareEvents.Retain(cr.Name, dedupKeys)
+
 	cr.Status.ObservedGeneration = cr.Generation
 	cr.Status.DesiredVersion = cr.Spec.Version
 	cr.Status.Summary = summary
@@ -218,8 +239,18 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
 		}
+		metrics.FirmwareErrorsTotal.WithLabelValues(cr.Name, "update_status").Inc()
 		return ctrl.Result{}, fmt.Errorf("update status: %w", err)
 	}
+
+	// Fleet-wide fw-version gauge, read back from the labels the summary
+	// loop just wrote. Best-effort: a failed node List shouldn't fail a
+	// reconcile that already did its real work.
+	if err := r.recordFWVersionMetrics(ctx); err != nil {
+		metrics.FirmwareErrorsTotal.WithLabelValues(cr.Name, "record_fw_version_metrics").Inc()
+		logger.Error(err, "record fw-version metrics")
+	}
+	metrics.FirmwareReconcileSucceeded(cr.Name)
 
 	// Requeue while any node is mid-flight. Jobs trigger watches anyway, but a
 	// short fallback covers cases where Job conditions land but no event fires.
@@ -373,8 +404,8 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 			for _, p := range devicePods {
 				names = append(names, p.Namespace+"/"+p.Name)
 			}
-			ns.Message = fmt.Sprintf("drain timeout after %s; blocking pods: %s",
-				drainTimeout(cr), strings.Join(names, ","))
+			ns.Message = fmt.Sprintf("%s%s; blocking pods: %s",
+				MessageDrainTimeoutPrefix, drainTimeout(cr), strings.Join(names, ","))
 			return ns
 		}
 		ns.State = firmwarev1alpha1.NodeStateDraining
@@ -421,6 +452,10 @@ func (r *FirmwarePolicyReconciler) advanceNode(ctx context.Context, cr *firmware
 		for i := range pods {
 			if err := r.evictPod(ctx, &pods[i]); err != nil {
 				if _, blocked := err.(errEvictionBlocked); blocked {
+					// Counted per refused attempt — unlike the drain-timeout
+					// case, each of these is a fresh API rejection rather
+					// than a re-read of the same steady state.
+					metrics.FirmwareDrainBlockedTotal.WithLabelValues(cr.Name, metrics.ReasonPDB).Inc()
 					ns.Message = fmt.Sprintf("eviction of %s/%s blocked by PDB; will retry",
 						pods[i].Namespace, pods[i].Name)
 					log.FromContext(ctx).Info("eviction blocked by PDB",
@@ -430,6 +465,7 @@ func (r *FirmwarePolicyReconciler) advanceNode(ctx context.Context, cr *firmware
 				}
 				return false, fmt.Errorf("evict %s/%s: %w", pods[i].Namespace, pods[i].Name, err)
 			}
+			metrics.FirmwarePodsEvictedTotal.WithLabelValues(cr.Name).Inc()
 			log.FromContext(ctx).Info("evicted pod",
 				"cr", cr.Name, "node", node.Name,
 				"pod", pods[i].Namespace+"/"+pods[i].Name)
@@ -454,27 +490,34 @@ func (r *FirmwarePolicyReconciler) advanceNode(ctx context.Context, cr *firmware
 	return false, nil
 }
 
-// countInFlightJobs returns the number of unfinished Jobs owned by this CR,
-// identified by the JobLabelCR label. "Unfinished" means jobFinished returns
-// (false, _) — i.e. no terminal Complete/Failed condition is set yet. This is
-// the source of truth for "how many parallelism slots are currently consumed"
-// and is robust to observed-state drift across reconciles.
-func (r *FirmwarePolicyReconciler) countInFlightJobs(ctx context.Context, cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) (int, error) {
+// jobsForCR lists every flash Job owned by this CR, identified by the
+// JobLabelCR label — finished ones included, since both the parallelism
+// accounting and the flash-duration metrics read them.
+func (r *FirmwarePolicyReconciler) jobsForCR(ctx context.Context, cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) ([]batchv1.Job, error) {
 	var jobs batchv1.JobList
 	if err := r.List(ctx, &jobs,
 		client.InNamespace(operatorNamespace()),
 		client.MatchingLabels{JobLabelCR: cr.Name},
 	); err != nil {
-		return 0, err
+		return nil, err
 	}
+	return jobs.Items, nil
+}
+
+// countInFlightJobs returns the number of unfinished Jobs in the list.
+// "Unfinished" means jobFinished returns (false, _) — i.e. no terminal
+// Complete/Failed condition is set yet. This is the source of truth for
+// "how many parallelism slots are currently consumed" and is robust to
+// observed-state drift across reconciles.
+func countInFlightJobs(jobs []batchv1.Job) int {
 	n := 0
-	for i := range jobs.Items {
-		completed, _ := jobFinished(&jobs.Items[i])
+	for i := range jobs {
+		completed, _ := jobFinished(&jobs[i])
 		if !completed {
 			n++
 		}
 	}
-	return n, nil
+	return n
 }
 
 // spawnFlashJob creates the per-node flash Job and writes the
@@ -485,12 +528,17 @@ func (r *FirmwarePolicyReconciler) spawnFlashJob(ctx context.Context, cr *firmwa
 	setOwnerRef(job, cr)
 	if err := r.Create(ctx, job); err != nil {
 		if apierrors.IsAlreadyExists(err) {
+			// Not a creation and not a failure — the Job is already there,
+			// so nothing to count.
 			ns.State = firmwarev1alpha1.NodeStateFlashing
 			ns.LastFlashJob = job.Name
 			return true, nil
 		}
+		metrics.FirmwareFlashJobsCreatedTotal.WithLabelValues(cr.Name, metrics.ResultError).Inc()
+		metrics.FirmwareErrorsTotal.WithLabelValues(cr.Name, "create_flash_job").Inc()
 		return false, fmt.Errorf("create flash job: %w", err)
 	}
+	metrics.FirmwareFlashJobsCreatedTotal.WithLabelValues(cr.Name, metrics.ResultSuccess).Inc()
 	log.FromContext(ctx).Info("spawned flash Job",
 		"cr", cr.Name, "node", node.Name, "version", cr.Spec.Version, "job", job.Name)
 
@@ -611,4 +659,3 @@ func (r *FirmwarePolicyReconciler) mapNodeToCRs(ctx context.Context, _ client.Ob
 	}
 	return out
 }
-

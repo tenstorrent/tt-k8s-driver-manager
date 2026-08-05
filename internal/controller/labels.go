@@ -61,6 +61,13 @@ const (
 // selector matches a node already owned by a different CR.
 const MessageNodeConflict = "Conflict: node owned by a different TenstorrentFirmwarePolicy CR"
 
+// MessageDrainTimeoutPrefix starts the NodeStatus.Message of a node whose
+// drain window expired with device pods still running. Exported as a
+// prefix (the rest of the message names the blocking pods) so the metrics
+// path can tell a drain stall apart from a failed flash Job without
+// re-deriving the timeout.
+const MessageDrainTimeoutPrefix = "drain timeout after "
+
 // MessageExternalCordon is set when the node is cordoned but the cordon
 // wasn't applied by us — likely an external maintenance window. We
 // refuse to flash to avoid running tt-flash concurrent with whatever
