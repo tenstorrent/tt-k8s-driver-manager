@@ -36,6 +36,12 @@ rules:
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
+  # Driver-controller emits Events on spec.unmanage transitions
+  # (Unmanaged / UnloadFailed per node) and the firmware controller
+  # has reserved space for similar event recording.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

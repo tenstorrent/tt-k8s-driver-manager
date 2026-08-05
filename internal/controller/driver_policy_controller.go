@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,7 +45,8 @@ const dsTemplateHashAnnotation = "driver.tenstorrent.com/template-hash"
 // DaemonSet's own status is the source of truth.
 type DriverPolicyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=driver.tenstorrent.com,resources=tenstorrentdriverpolicies,verbs=get;list;watch;update;patch
@@ -52,6 +55,8 @@ type DriverPolicyReconciler struct {
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("ttdp", req.Name)
@@ -69,6 +74,23 @@ func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if !cr.DeletionTimestamp.IsZero() {
 		metrics.DeleteDriverPolicySeries(cr.Name)
 		return ctrl.Result{}, nil
+	}
+
+	// spec.unmanage=true asks the controller to vacate every in-scope
+	// node so an external manager (DKMS) can take over. This is a
+	// separate flow from the normal upgrade path — it doesn't touch the
+	// DaemonSet spec, just walks each node through cordon→drain→unload
+	// and removes the install-mode label on success. The DaemonSet is
+	// torn down only after every matched node is terminal.
+	if cr.Spec.Unmanage {
+		return r.reconcileUnmanageFlow(ctx, cr)
+	}
+
+	// Coming back from unmanage: clear the phase so normal reconcile
+	// resumes. We don't proactively delete per-node status entries —
+	// the next normal reconcile re-derives them from the DS pods.
+	if cr.Status.Phase != "" {
+		cr.Status.Phase = ""
 	}
 
 	// Count matched nodes for status. The DaemonSet's own nodeAffinity is
@@ -748,9 +770,18 @@ func defaultDriverImage() string {
 }
 
 func (r *DriverPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Lazily wire the EventRecorder if main.go didn't pre-set it (e.g.
+	// envtest setups that construct the reconciler directly).
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("tenstorrent-driver-policy")
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&driverv1alpha1.TenstorrentDriverPolicy{}).
 		Owns(&appsv1.DaemonSet{}).
+		// Per-node unload Jobs spawned by the unmanage flow are owned by
+		// the CR; watch them so a Job-Completed event re-triggers the
+		// reconcile that flips the node into Unmanaged / UnloadFailed.
+		Owns(&batchv1.Job{}).
 		Watches(
 			&corev1.Node{},
 			handler.EnqueueRequestsFromMapFunc(r.mapNodeToDriverCRs),

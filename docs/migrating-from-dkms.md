@@ -217,28 +217,84 @@ and migrate the rest of the fleet one node at a time.
   `lsof /dev/tenstorrent/*` and `fuser -v /dev/tenstorrent/*` to find
   the PID, stop it, then re-run the vacate script.
 
+## Going back to DKMS
+
+The reverse path — operator-managed → DKMS-managed — has a first-class
+flag on the CR. Set `spec.unmanage: true` and the controller drains
+`/dev/tenstorrent` holders, runs a one-shot Job per matched node that
+`rmmod`s tt-kmd and deletes the operator-built `.ko`, drops the
+`driver.tenstorrent.com/install-mode=container` label, and tears down
+its DaemonSet. The host is then in the same shape it was before the
+operator ever touched it: nothing in `/sys/module/tenstorrent`, no
+operator-managed `.ko` under `/lib/modules`. Install DKMS (or your
+preferred host-managed path) and `modprobe tenstorrent` — the operator
+stays out of the way until you flip `spec.unmanage: false`.
+
+```yaml
+apiVersion: driver.tenstorrent.com/v1alpha1
+kind: TenstorrentDriverPolicy
+metadata:
+  name: fleet
+spec:
+  version: "2.8.0"
+  nodeSelector: {}
+  unmanage: true                    # vacate every matched node
+```
+
+Per-node progression is surfaced in `.status.nodes[].state`:
+
+- `Cordoning` → `Draining` → `Unloading` → `Unmanaged` (terminal success).
+- `Unloading` → `UnloadFailed` (terminal bad — operator must intervene).
+
+`.status.phase` flips to `Unmanaged` once *every* in-scope node reaches
+the terminal-success state. Per-node Events (`Normal Unmanaged`,
+`Warning UnloadFailed`) are emitted against the CR for dashboarding.
+
+**Strict failure mode.** If one node's unload Job fails — typically
+`refcnt > 0` because some workload is still holding `/dev/tenstorrent`
+— the controller halts the rest of the batch. That node stays cordoned
+(so workloads don't reland on it), other nodes that haven't started
+unloading yet stay put, and the operator must fix the stuck node before
+the rollout resumes. We default strict rather than rolling because a
+half-vacated fleet is harder to reason about than a halted one with a
+per-node Reason.
+
+**Reversibility.** Set `spec.unmanage: false` (or remove the field) and
+the controller resumes normal reconcile on the next pass. If the host
+now has DKMS signals it stays host-managed (operator stands down per
+the [install-mode](driver.md#mixed-mode) detection); if not, the
+operator reinstalls from container. No paused/unpause dance needed.
+
+The manual recipe in [Per-node vacate procedure](#per-node-vacate-procedure)
+above is the fallback for environments where you want to vacate one
+node at a time outside the operator's batch — or for the operator
+itself, on the day someone needs to dig into what the unload Job is
+running.
+
 ## Rollback / safety net
 
 If the operator-managed install misbehaves on a migrated node and you
 want to fall back to DKMS quickly:
 
 ```bash
-# 1. Stop the operator from reconciling against this node.
-kubectl patch ttdp <name> --type merge -p '{"spec":{"paused":true}}'
+# 1. Ask the operator to vacate this node (preferred — see "Going
+#    back to DKMS" above).
+kubectl patch ttdp <name> --type merge -p '{"spec":{"unmanage":true}}'
 
-# 2. On the node, unload the operator's kmd and reinstall via DKMS.
-sudo rmmod tenstorrent
+# 2. Wait for .status.phase=Unmanaged, then install DKMS on the host
+#    (apt / tt-ansible / manual dkms install).
 sudo apt install --reinstall tenstorrent-dkms    # or: dkms install tenstorrent/<v>
 sudo modprobe tenstorrent
+
+# 3. Resume operator reconcile. host-managed signals take precedence —
+#    the operator detects DKMS and stays out of the way.
+kubectl patch ttdp <name> --type merge -p '{"spec":{"unmanage":false}}'
 ```
 
-`paused: true` is load-bearing here: it stops the controller from
-fighting the manual DKMS reinstall. Once `dkms install` re-creates
-`/var/lib/dkms/tenstorrent`, the builder pod on the next reconcile will
-re-detect host-managed mode and stand down — but only if the CR is
-unpaused with the host already in host-managed state, so flip
-`paused: false` only *after* you've confirmed `install-mode=host` on the
-node label.
+If you'd rather not use `spec.unmanage` (older operator versions, or you
+want to vacate just one node out of a wider selector), the older path
+of `paused: true` + manual `rmmod` + DKMS reinstall still works — see
+[Per-node vacate procedure](#per-node-vacate-procedure) above.
 
 To take a node out of driver-manager reconciliation entirely (not just
 "operator detected host ownership"), set the
