@@ -57,6 +57,117 @@ idles. Both must be gone for the builder to fall through to its build
 path. This is the same check documented in
 [Mixed mode](driver.md#mixed-mode).
 
+## Stop the components that hold the device
+
+The vacate script below starts by asserting
+`/sys/module/tenstorrent/refcnt` is 0. On a node running the full
+Tenstorrent stack it won't be: two per-node components open the device
+for the lifetime of their pod.
+
+| Component | Workload | Holds the device? |
+|---|---|---|
+| [Telemetry](https://docs.tenstorrent.com/tt-telemetry/) | collector DaemonSet | Yes — UMD opens `/dev/tenstorrent/*` at start-up. |
+| [Fabric Manager](https://docs.tenstorrent.com/tt-fabric-manager/) | agent DaemonSet | Yes — the agent reads local card topology off the device. |
+| [Fabric Manager](https://docs.tenstorrent.com/tt-fabric-manager/) | controller Deployment | No — cluster-scoped, talks only to the agents. |
+| [Device Allocation (DRA)](https://docs.tenstorrent.com/tt-dra-driver/) | kubelet plugin DaemonSet | No — discovers hardware over the fabric-manager agent's gRPC API. |
+
+Neither of the two holders is reachable by draining the node:
+`kubectl drain --ignore-daemonsets` leaves DaemonSet pods in place, and
+deleting a pod by hand just makes the DaemonSet controller recreate it.
+Both also take the device via `privileged: true` rather than a
+`hostPath` mount of `/dev/tenstorrent`, so the controller's own pass-1
+drain — which selects on that hostPath — misses them too.
+
+Stand them down per-node with the **deploy-gate** node labels instead.
+
+### Telemetry
+
+The telemetry collector's `nodeAffinity` carries
+`tenstorrent.com/deploy.tt-telemetry NotIn ["false"]`, so setting the
+label to `false` makes the DaemonSet controller terminate that node's
+pod and leave every other node alone:
+
+```bash
+kubectl label node "$NODE" tenstorrent.com/deploy.tt-telemetry=false --overwrite
+kubectl -n tt-operator-system wait --for=delete pod \
+  -l app=tt-telemetry --field-selector spec.nodeName="$NODE" --timeout=2m
+```
+
+This is the same label the controller flips during a driver upgrade —
+see [Deploy gates](driver.md#deploy-gates).
+
+The gate affinity ships in the
+[tt-operator](https://docs.tenstorrent.com/tt-operator/) umbrella
+chart's values, not in the telemetry subchart's own defaults. If you
+installed telemetry standalone, add the same `NotIn ["false"]`
+expression to `daemonset.affinity` first, or the label has no effect.
+
+### Fabric Manager
+
+No deploy gate ships for the fabric-manager agent, so give it one. Add
+the gate key to the agent's affinity and to the driver-manager
+controller's gate list, so later driver upgrades stand the agent down
+automatically too:
+
+```yaml
+# tt-operator umbrella chart values
+tt-fabric-manager:
+  agent:
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: feature.node.kubernetes.io/pci-1200_1e52.present
+                  operator: In
+                  values: ["true"]
+                - key: tenstorrent.com/deploy.tt-fabric-manager
+                  operator: NotIn
+                  values: ["false"]
+
+tt-k8s-driver-manager:
+  controller:
+    deployGates:
+      - "tenstorrent.com/deploy.tt-telemetry"
+      - "tenstorrent.com/deploy.tt-fabric-manager"
+```
+
+`agent.affinity` replaces the agent's default node selection outright.
+The expression above keys off the PCI label applied by NFD; if your
+cluster labels Tenstorrent nodes by hand with
+`tenstorrent.com/has-tt=true` instead, swap the first expression to
+match that. Both expressions sit in **one** `matchExpressions` list so
+they are ANDed — a second `nodeSelectorTerms` entry would be an OR and
+would let the agent schedule through the gate.
+
+After `helm upgrade`, gate the node:
+
+```bash
+kubectl label node "$NODE" tenstorrent.com/deploy.tt-fabric-manager=false --overwrite
+kubectl -n tt-operator-system wait --for=delete pod \
+  -l ttfm.tenstorrent.com/component=agent \
+  --field-selector spec.nodeName="$NODE" --timeout=2m
+```
+
+For a one-off maintenance window where you don't want to change chart
+values, `helm upgrade --set tt-fabric-manager.enabled=false` removes the
+agents fleet-wide instead. Fine for a single-node bring-up; for a
+rolling fleet migration prefer the per-node gate, which keeps fabric
+management up everywhere else.
+
+### Confirm the device is free
+
+```bash
+# Nothing Tenstorrent-related left on the node
+kubectl get pods --all-namespaces --field-selector spec.nodeName="$NODE"
+
+# On the node
+cat /sys/module/tenstorrent/refcnt        # 0
+```
+
+Restore the labels *after* the operator has loaded its own kmd — see
+[Watch the takeover](#watch-the-takeover).
+
 ## Per-node vacate procedure
 
 Run this on the node as root (via Ansible, `kubectl debug node`, or SSH).
@@ -120,12 +231,23 @@ kubectl drain "$NODE" \
   --pod-selector='tenstorrent.com/uses-device=true' \
   --timeout=10m
 
-# 2. Run the vacate procedure on the node (SSH / Ansible / kubectl debug)
+# 2. Gate off the DaemonSets the drain can't touch — see
+#    "Stop the components that hold the device" above.
+kubectl label node "$NODE" \
+  tenstorrent.com/deploy.tt-telemetry=false \
+  tenstorrent.com/deploy.tt-fabric-manager=false --overwrite
+
+# 3. Run the vacate procedure on the node (SSH / Ansible / kubectl debug)
 #    — see "Per-node vacate procedure" above.
 
-# 3. Uncordon. The builder DS will reschedule onto the node and,
+# 4. Uncordon. The builder DS will reschedule onto the node and,
 #    finding no DKMS signals, fall through to the build path.
 kubectl uncordon "$NODE"
+
+# 5. Once /dev/tenstorrent is back (see "Watch the takeover"), ungate.
+kubectl label node "$NODE" \
+  tenstorrent.com/deploy.tt-telemetry- \
+  tenstorrent.com/deploy.tt-fabric-manager-
 ```
 
 If `spec.upgradePolicy.drain.enable=true` on your CR (the default), the
@@ -155,6 +277,25 @@ ls /dev/tenstorrent/
 After the builder finishes (~30–90s for the first build, ~5s on cache
 hit), `kubectl get ttdp` should show the CR's `READY` count increment
 for this node.
+
+Only now remove the deploy-gate labels, so telemetry and the
+fabric-manager agent come back onto a node that already has a loaded
+kmd and populated `/dev/tenstorrent`:
+
+```bash
+kubectl label node "$NODE" \
+  tenstorrent.com/deploy.tt-telemetry- \
+  tenstorrent.com/deploy.tt-fabric-manager-
+```
+
+The DRA kubelet plugin was never gated, but its device inventory came
+from a fabric-manager agent that has since restarted. Restart it so it
+re-publishes ResourceSlices from a fresh topology read:
+
+```bash
+kubectl -n tt-operator-system rollout restart ds \
+  -l app.kubernetes.io/name=tt-dra-driver
+```
 
 ## A minimal ttdp for the test
 
@@ -212,10 +353,19 @@ and migrate the rest of the fleet one node at a time.
   reconciles (version bumps, pod restarts) hit `/var/cache/tt-kmd/` and
   finish in seconds.
 - **`refcnt > 0` means something's still holding `/dev/tenstorrent`.**
-  Don't reach for `rmmod -f`; find the holder. Common culprits:
-  `tt-smi`, `tt-telemetry`, an FM agent, a stuck inference pod. Use
+  Don't reach for `rmmod -f`; find the holder. By far the most common
+  cause is skipping [Stop the components that hold the
+  device](#stop-the-components-that-hold-the-device) — the telemetry
+  collector and fabric-manager agent survive `kubectl drain`. Otherwise
+  look for a host-side `tt-smi` or a stuck inference pod: use
   `lsof /dev/tenstorrent/*` and `fuser -v /dev/tenstorrent/*` to find
   the PID, stop it, then re-run the vacate script.
+- **Don't forget to ungate.** A node left labelled
+  `tenstorrent.com/deploy.tt-telemetry=false` migrates fine and then
+  silently reports no telemetry. `kubectl get nodes -L
+  tenstorrent.com/deploy.tt-telemetry -L
+  tenstorrent.com/deploy.tt-fabric-manager` after a fleet migration
+  catches the leftovers.
 
 ## Rollback / safety net
 
@@ -249,6 +399,8 @@ driver.tenstorrent.com/skip=true`.
 
 - [Mixed mode](driver.md#mixed-mode) — the detection logic
   from the operator's side.
+- [Deploy gates](driver.md#deploy-gates) — the same node labels, flipped
+  by the controller during a driver upgrade.
 - [Fully clean a host](troubleshooting.md#fully-clean-a-host)
   — a broader sweep that also clears operator-side state (cache,
   tt-smi, etc.); the vacate script above is the DKMS-only subset.
