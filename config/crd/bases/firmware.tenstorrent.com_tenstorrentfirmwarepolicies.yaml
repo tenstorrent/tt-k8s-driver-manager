@@ -370,6 +370,15 @@ spec:
                     name:
                       description: Name is the Node name.
                       type: string
+                    reason:
+                      description: |-
+                        Reason is a stable, programmatic CamelCase code explaining why the
+                        node is in its current State — populated for non-trivial outcomes
+                        (FlashJobFailed, FlasherImagePullFailed, DrainTimeout, Paused, ...)
+                        so `kubectl describe ttfwp` surfaces the cause without digging into
+                        operator logs. Empty when the state is self-explanatory (e.g. a
+                        Pending node simply waiting on a maxParallel slot).
+                      type: string
                     state:
                       description: State is the per-node upgrade state.
                       enum:

@@ -164,12 +164,37 @@ default   19.9.0    3         2          1            0        3m
 
 $ kubectl get ttfwp default -o jsonpath='{.status.nodes}' | jq
 [
-  {"name":"node-1","currentVersion":"19.9.0.0","state":"Done"},
-  {"name":"node-2","currentVersion":"19.9.0.0","state":"Done"},
+  {"name":"node-1","currentVersion":"19.9.0.0","state":"Done",
+   "reason":"FlashSucceeded"},
+  {"name":"node-2","currentVersion":"19.9.0.0","state":"Done",
+   "reason":"FlashSucceeded"},
   {"name":"node-3","currentVersion":"19.8.0.0","state":"Flashing",
+   "reason":"Flashing",
    "lastFlashJob":"ttfwp-default-node-3-19-9-0-abc1234"}
 ]
 ```
+
+`reason` is a stable CamelCase code for *why* a node is in its state —
+`FlashJobFailed`, `DrainTimeout`, `RolloutHalted`, `Paused`, and so on.
+Every state-or-reason transition also fires a Kubernetes Event against
+the CR, so the history is readable without the controller logs:
+
+```bash
+$ kubectl describe ttfwp default
+...
+Events:
+  Type     Reason          Age    From                       Message
+  ----     ------          ----   ----                       -------
+  Normal   Cordoning       3m     tt-k8s-driver-manager      node-3
+  Normal   Flashing        2m     tt-k8s-driver-manager      node-3
+  Warning  FlashJobFailed  30s    tt-k8s-driver-manager      node-3: Flash Job failed; see Job logs
+
+# Or fleet-wide, filtered by code:
+$ kubectl get events --field-selector reason=FlashJobFailed
+```
+
+The full code table is in
+[troubleshooting.md](troubleshooting.md#why-isnt-my-firmware-flashing).
 
 ### Watch the flasher Job
 
