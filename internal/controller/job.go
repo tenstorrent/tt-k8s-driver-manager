@@ -31,6 +31,36 @@ func jobName(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, version s
 	return strings.ToLower(fmt.Sprintf("%s-%s-%s", prefix, sanitizeVersion(version), suffix))
 }
 
+// expectedReadback is the version string tt-smi should report once the node
+// is at spec.version. Explicit spec.readbackVersion wins; otherwise the
+// "<version>.0" convention tt-ansible uses.
+func expectedReadback(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) string {
+	if cr.Spec.ReadbackVersion != "" {
+		return cr.Spec.ReadbackVersion
+	}
+	return cr.Spec.Version + ".0"
+}
+
+// flasherForcesWork reports whether the CR carries an explicit "go touch this
+// node whatever it reports" flag. Both flags exist precisely for hardware
+// whose readback can't be trusted (re-flash of the same version, a wedged
+// chip), so neither can be gated on that readback.
+func flasherForcesWork(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) bool {
+	f := cr.Spec.Flasher
+	return f != nil && (f.ForceWrite || f.ContinueOnReadbackFailure)
+}
+
+// nodeAtDesiredVersion reports whether the node's recorded firmware readback
+// already matches what this CR wants. An unset annotation reads as "unknown",
+// never as "up to date".
+func nodeAtDesiredVersion(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, node *corev1.Node) bool {
+	if flasherForcesWork(cr) {
+		return false
+	}
+	cur := node.Annotations[AnnoCurrentVersion]
+	return cur != "" && cur == expectedReadback(cr)
+}
+
 func sanitizeVersion(v string) string {
 	return strings.ReplaceAll(v, ".", "-")
 }
@@ -47,10 +77,7 @@ func boolEnv(b bool) string {
 // then asserts readback via tt-smi.
 func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, defaultImage string) *batchv1.Job {
 	version := cr.Spec.Version
-	readback := cr.Spec.ReadbackVersion
-	if readback == "" {
-		readback = version + ".0"
-	}
+	readback := expectedReadback(cr)
 	bundleURL := cr.Spec.BundleURL
 	if bundleURL == "" {
 		bundleURL = fmt.Sprintf(

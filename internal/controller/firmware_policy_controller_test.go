@@ -844,3 +844,173 @@ func toClientObjects(in []runtime.Object) []client.Object {
 	}
 	return out
 }
+
+// The iad-equinix incident: every node was already at the desired version,
+// and every node was cordoned and given a no-op Job anyway. The gate has to
+// short-circuit before any of that happens.
+func TestReconcile_AlreadyAtDesiredVersion_NoCordonNoJob(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	enable := true
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &enable
+	n := node("worker-0", nil)
+	n.Annotations = map[string]string{AnnoCurrentVersion: "19.8.0.0"}
+
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(cr, toClientObject(n)).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+
+	// Reconcile twice: the incident's signature is a cycle, so one pass
+	// staying clean isn't enough.
+	for i := 0; i < 2; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+			t.Fatalf("reconcile #%d: %v", i+1, err)
+		}
+	}
+
+	var after corev1.Node
+	if err := r.Get(context.Background(), types.NamespacedName{Name: n.Name}, &after); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if after.Spec.Unschedulable {
+		t.Error("node at desired version must not be cordoned")
+	}
+	if after.Annotations[AnnoCordonedBy] != "" {
+		t.Errorf("cordoned-by should be unset, got %q", after.Annotations[AnnoCordonedBy])
+	}
+
+	var jobs batchv1.JobList
+	if err := r.List(context.Background(), &jobs); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no flash Job, got %d", len(jobs.Items))
+	}
+
+	var got firmwarev1alpha1.TenstorrentFirmwarePolicy
+	_ = r.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &got)
+	if got.Status.Summary.UpToDate != 1 || got.Status.Summary.InProgress != 0 {
+		t.Errorf("expected UpToDate=1 InProgress=0, got %+v", got.Status.Summary)
+	}
+	if len(got.Status.Nodes) != 1 || got.Status.Nodes[0].State != firmwarev1alpha1.NodeStateDone {
+		t.Fatalf("expected node state Done, got %+v", got.Status.Nodes)
+	}
+	if got.Status.Nodes[0].Message != MessageAlreadyUpToDate {
+		t.Errorf("expected message %q, got %q", MessageAlreadyUpToDate, got.Status.Nodes[0].Message)
+	}
+}
+
+// A node whose recorded version differs still goes through the full path.
+func TestReconcile_DifferentVersion_StillCordons(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	enable := true
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &enable
+	n := node("worker-0", nil)
+	n.Annotations = map[string]string{AnnoCurrentVersion: "19.7.0.0"}
+
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(cr, toClientObject(n)).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var after corev1.Node
+	_ = r.Get(context.Background(), types.NamespacedName{Name: n.Name}, &after)
+	if !after.Spec.Unschedulable {
+		t.Error("node at a different version should still be cordoned")
+	}
+}
+
+// forceWrite is the escape hatch for re-flashing the same version, so it has
+// to punch through the gate.
+func TestReconcile_ForceWriteBypassesUpToDateGate(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	enable := true
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &enable
+	cr.Spec.Flasher = &firmwarev1alpha1.FlasherOverride{ForceWrite: true}
+	n := node("worker-0", nil)
+	n.Annotations = map[string]string{AnnoCurrentVersion: "19.8.0.0"}
+
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(cr, toClientObject(n)).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var after corev1.Node
+	_ = r.Get(context.Background(), types.NamespacedName{Name: n.Name}, &after)
+	if !after.Spec.Unschedulable {
+		t.Error("forceWrite should still cordon an up-to-date node")
+	}
+}
+
+// The gate must not swallow the uncordon a node is still owed: we hold the
+// cordon, the Job has aged out, and the annotation says up to date.
+func TestReconcile_UpToDateButWeHoldCordon_StillFinishesCleanup(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	enable := true
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &enable
+	n := node("worker-0", map[string]string{LabelOwnerCR: cr.Name})
+	n.Spec.Unschedulable = true
+	n.Annotations = map[string]string{
+		AnnoCurrentVersion: "19.8.0.0",
+		AnnoCordonedBy:     cr.Name,
+	}
+
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(cr, toClientObject(n)).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got firmwarev1alpha1.TenstorrentFirmwarePolicy
+	_ = r.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &got)
+	if len(got.Status.Nodes) != 1 {
+		t.Fatalf("expected 1 node in status, got %+v", got.Status.Nodes)
+	}
+	if got.Status.Nodes[0].State == firmwarev1alpha1.NodeStateDone {
+		t.Error("must not report Done while still holding the cordon")
+	}
+}
+
+func TestExpectedReadback(t *testing.T) {
+	cr := newCR()
+	if got := expectedReadback(cr); got != "19.8.0.0" {
+		t.Errorf("default readback: got %q, want 19.8.0.0", got)
+	}
+	cr.Spec.ReadbackVersion = "19.8.0"
+	if got := expectedReadback(cr); got != "19.8.0" {
+		t.Errorf("explicit readback: got %q, want 19.8.0", got)
+	}
+}
