@@ -845,9 +845,8 @@ func toClientObjects(in []runtime.Object) []client.Object {
 	return out
 }
 
-// The iad-equinix incident: every node was already at the desired version,
-// and every node was cordoned and given a no-op Job anyway. The gate has to
-// short-circuit before any of that happens.
+// A fleet already at the desired version must not be cordoned and handed a
+// no-op Job. The gate has to short-circuit before any of that happens.
 func TestReconcile_AlreadyAtDesiredVersion_NoCordonNoJob(t *testing.T) {
 	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
 	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
@@ -867,8 +866,8 @@ func TestReconcile_AlreadyAtDesiredVersion_NoCordonNoJob(t *testing.T) {
 			Build(),
 	}
 
-	// Reconcile twice: the incident's signature is a cycle, so one pass
-	// staying clean isn't enough.
+	// Reconcile twice: the regression this guards against is a repeating
+	// cycle, so one clean pass isn't enough.
 	for i := 0; i < 2; i++ {
 		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
 			t.Fatalf("reconcile #%d: %v", i+1, err)
