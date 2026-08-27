@@ -18,9 +18,12 @@ spec:
 
 What happens:
 
-1. Controller walks each matched node through a state machine:
+1. Controller checks the node's recorded firmware version first. A node
+   already at the target goes straight to `Done` — see [Skipping
+   already-compliant nodes](#skipping-already-compliant-nodes).
+2. Otherwise the controller walks the node through a state machine:
    `Pending → (Cordoning → Draining)? → Flashing → Uncordoning → Done`.
-2. For each node, a Job is created in the operator namespace using the
+3. For each node, a Job is created in the operator namespace using the
    flasher image (`ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher`).
    The Job:
    - Reads pre-flash version via `tt-smi -s`.
@@ -30,7 +33,7 @@ What happens:
      `spec.flasher.forceWrite=true`).
    - Asserts post-flash readback equals `spec.readbackVersion` (default
      `<version>.0` to match the firmware bundle's readback format).
-3. Job's exit code is the controller's signal — no separate readback
+4. Job's exit code is the controller's signal — no separate readback
    step in the reconcile loop. A non-zero exit moves the node to
    `Failed` with the Job's last log lines surfaced in CR status.
 
@@ -51,8 +54,8 @@ What happens:
 | `upgradePolicy.drain.force` | `false` | Delete pods that have no controller (bare Pods) instead of evicting. |
 | `flasher.image` | chart's `flasher.image` | Per-CR override of the flasher image. |
 | `flasher.imagePullPolicy` | `IfNotPresent` | Override for the above. |
-| `flasher.forceWrite` | `false` | Bypass the "current readback already matches target" short-circuit and pass `--force` to tt-flash. Use for re-flashing the same version, downgrades, or suspected silent ROM corruption. |
-| `flasher.continueOnReadbackFailure` | `false` | Continue with the flash even if `tt-smi` pre-flash readback fails (chip wedged / driver detached). Independent of `forceWrite`: a chip that subsequently recovers and reports the target version will still skip the flash unless `forceWrite` is also set. |
+| `flasher.forceWrite` | `false` | Bypass both the controller's [already-compliant gate](#skipping-already-compliant-nodes) and the flasher's own "current readback already matches target" short-circuit, and pass `--force` to tt-flash. Use for re-flashing the same version, downgrades, or suspected silent ROM corruption. |
+| `flasher.continueOnReadbackFailure` | `false` | Continue with the flash even if `tt-smi` pre-flash readback fails (chip wedged / driver detached). Also bypasses the controller's [already-compliant gate](#skipping-already-compliant-nodes), so a node whose annotation is stale still gets a Job. Independent of `forceWrite`: a chip that subsequently recovers and reports the target version will still skip the flash unless `forceWrite` is also set. |
 
 ## CR examples
 
@@ -103,6 +106,33 @@ spec:
   bundleURL: "https://internal.example.com/fw/fw_pack-19.8.0.fwbundle"
   readbackVersion: "19.8.0.0"   # explicit; helps when bundle metadata is odd
 ```
+
+## Skipping already-compliant nodes
+
+Before the controller cordons anything, it compares the node's
+`firmware.tenstorrent.com/current-version` annotation against the CR's
+expected readback (`readbackVersion`, defaulting to `<version>.0`). If
+they match, the node is reported `Done` with the message `already at
+desired firmware version; no flash needed` — no cordon, no eviction, no
+Job.
+
+This matters because a finished Job is garbage-collected 24 hours after
+it completes. Without the check, the next reconcile after that TTL sees
+no Job, cordons the node, evicts its workloads, and spawns a Job whose
+only outcome is the flasher no-opping — every day, on every node that is
+already at the target version.
+
+The check trusts the annotation, which the controller wrote itself from
+a previous readback. Two ways to override it when the annotation may be
+stale — a swapped board, a chip the driver can no longer read:
+
+- `flasher.forceWrite: true` — re-flash regardless of reported version.
+- `flasher.continueOnReadbackFailure: true` — spawn the Job and let it
+  decide, even if `tt-smi` can't read the chip pre-flash.
+
+A node the controller has never flashed has no annotation, which reads
+as "unknown" rather than "up to date", so first-time nodes always get a
+Job.
 
 ## Drain semantics
 
