@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,7 +44,8 @@ const dsTemplateHashAnnotation = "driver.tenstorrent.com/template-hash"
 // DaemonSet's own status is the source of truth.
 type DriverPolicyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=driver.tenstorrent.com,resources=tenstorrentdriverpolicies,verbs=get;list;watch;update;patch
@@ -52,6 +54,7 @@ type DriverPolicyReconciler struct {
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *DriverPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("ttdp", req.Name)
@@ -352,10 +355,22 @@ func (r *DriverPolicyReconciler) populateNodeStatuses(
 			continue
 		}
 		var rc int32
+		var waitReason string
 		if len(p.Status.ContainerStatuses) > 0 {
-			rc = p.Status.ContainerStatuses[0].RestartCount
+			cs := p.Status.ContainerStatuses[0]
+			rc = cs.RestartCount
+			// ImagePullBackOff / ErrImagePull / CrashLoopBackOff land on
+			// the container's Waiting.Reason — keep the raw kubelet code
+			// so the resulting Event reason is honest about the source.
+			if cs.State.Waiting != nil {
+				waitReason = cs.State.Waiting.Reason
+			}
 		}
-		info := podInfo{version: podEnv(p, "TT_KMD_VERSION"), restartCount: rc}
+		info := podInfo{
+			version:       podEnv(p, "TT_KMD_VERSION"),
+			restartCount:  rc,
+			waitingReason: waitReason,
+		}
 		for _, c := range p.Status.Conditions {
 			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
 				info.ready = true
@@ -376,24 +391,37 @@ func (r *DriverPolicyReconciler) populateNodeStatuses(
 	for i := range nodes {
 		node := &nodes[i]
 		info := byNode[node.Name]
-		state := computeDriverNodeState(node, info, cr)
+		state, reason, msg := computeDriverNodeStateReason(node, info, cr)
 		ns := driverv1alpha1.DriverNodeStatus{
 			Name:           node.Name,
 			State:          state,
+			Reason:         reason,
+			Message:        msg,
 			CurrentVersion: info.version,
 		}
-		if old, ok := prev[node.Name]; ok && old.State == state {
+		old, hadPrev := prev[node.Name]
+		if hadPrev && old.State == state && old.Reason == reason {
 			ns.LastTransitionTime = old.LastTransitionTime
 		} else {
 			ns.LastTransitionTime = metav1.Now()
-		}
-		if state == driverv1alpha1.DriverNodeStateFailed && info.restartCount > 0 {
-			ns.Message = fmt.Sprintf("installer pod CrashLoopBackOff (restarts=%d)", info.restartCount)
+			// State or reason transitioned — emit a k8s Event so
+			// `kubectl describe ttdp` shows the cause without operators
+			// having to scrape controller logs. Skip the initial
+			// "Pending without prior state" pass to keep the event
+			// stream signal-to-noise high on first reconcile.
+			if hadPrev || (state != driverv1alpha1.DriverNodeStatePending && reason != "") {
+				r.recordNodeStateEvent(cr, node.Name, state, reason, msg)
+			}
 		}
 		out = append(out, ns)
 
 		switch state {
-		case driverv1alpha1.DriverNodeStateDone:
+		case driverv1alpha1.DriverNodeStateDone, driverv1alpha1.DriverNodeStateHostManaged:
+			// HostManaged is a successful terminal state from the
+			// operator's perspective: the host owns kmd, the node is
+			// "covered" without us doing anything. Count it as
+			// up-to-date so cr.status.summary.upToDate reflects the
+			// covered-node count rather than only operator-installed.
 			upToDate++
 		case driverv1alpha1.DriverNodeStateCordoning,
 			driverv1alpha1.DriverNodeStateDraining,
@@ -408,28 +436,89 @@ func (r *DriverPolicyReconciler) populateNodeStatuses(
 	return nil
 }
 
-// podInfo for computeDriverNodeState — duplicated from populateNodeStatuses
-// because Go anon-struct types don't carry across function boundaries.
+// recordNodeStateEvent emits a k8s Event for a node's state transition.
+// Type is Warning for failure shapes (Failed, BuilderImagePullFailed,
+// BuilderCrashLoop) and Normal otherwise. `Reason` is the stable code;
+// `Message` carries node-name + human context.
+func (r *DriverPolicyReconciler) recordNodeStateEvent(
+	cr *driverv1alpha1.TenstorrentDriverPolicy,
+	nodeName string,
+	state driverv1alpha1.DriverNodeState,
+	reason, msg string,
+) {
+	if r.Recorder == nil || reason == "" {
+		return
+	}
+	evtType := corev1.EventTypeNormal
+	switch reason {
+	case ReasonBuilderImagePullFailed, ReasonBuilderCrashLoop:
+		evtType = corev1.EventTypeWarning
+	}
+	if state == driverv1alpha1.DriverNodeStateFailed {
+		evtType = corev1.EventTypeWarning
+	}
+	body := nodeName
+	if msg != "" {
+		body = fmt.Sprintf("%s: %s", nodeName, msg)
+	}
+	r.Recorder.Event(cr, evtType, reason, body)
+}
+
+// podInfo for computeDriverNodeStateReason — duplicated from
+// populateNodeStatuses because Go anon-struct types don't carry across
+// function boundaries.
 type podInfo struct {
 	version      string
 	ready        bool
 	restartCount int32
+	// waitingReason is the raw kubelet ContainerStatus.Waiting.Reason
+	// (ImagePullBackOff / ErrImagePull / CrashLoopBackOff / ...).
+	// Empty when the container isn't waiting.
+	waitingReason string
 }
 
-// computeDriverNodeState derives the per-node state from cordon/pod
-// signals. The state model collapses across both drain-enabled and
-// drain-disabled paths — for the latter, Cordoning / Draining /
-// Uncordoning are never observed.
-func computeDriverNodeState(
+// computeDriverNodeStateReason derives the per-node (state, reason,
+// message) from cordon/pod/label signals. The state model collapses
+// across both drain-enabled and drain-disabled paths — for the latter,
+// Cordoning / Draining / Uncordoning are never observed.
+//
+// Reason is a stable CamelCase code (see labels.go) so operators can
+// kubectl-describe / event-filter on it; Message is the human context.
+func computeDriverNodeStateReason(
 	node *corev1.Node, info podInfo, cr *driverv1alpha1.TenstorrentDriverPolicy,
-) driverv1alpha1.DriverNodeState {
+) (driverv1alpha1.DriverNodeState, string, string) {
 	target := cr.Spec.Version
 	cordonedByUs := node.Annotations[AnnoDriverCordonedBy] == cr.Name
+
+	// Host-managed beats every other signal: the builder pod labels
+	// the node install-mode=host the moment it sees DKMS state, then
+	// `sleep infinity`s. The pod's readiness probe will never pass on
+	// a host-managed node (it checks /sys/module/tenstorrent/version
+	// against the CR's spec.version, which the host hasn't necessarily
+	// installed), so without this short-circuit a host-managed node
+	// looks like a perpetually-Upgrading failure in status.
+	if node.Labels[LabelInstallMode] == "host" {
+		return driverv1alpha1.DriverNodeStateHostManaged,
+			ReasonHostManagedKMD,
+			"DKMS / host-managed kmd detected; operator standing down (see node label " + LabelInstallMode + "=host)"
+	}
+
+	// ImagePullBackOff bubbles up via the container's Waiting.Reason.
+	// Surface BEFORE the CrashLoop check — a pod that's never run yet
+	// won't have restartCount, but kubelet will be flagging the pull
+	// failure on every reconcile.
+	if info.waitingReason == "ImagePullBackOff" || info.waitingReason == "ErrImagePull" {
+		return driverv1alpha1.DriverNodeStateFailed,
+			ReasonBuilderImagePullFailed,
+			"kubelet: " + info.waitingReason + " (check imagePullSecrets on the installer ServiceAccount)"
+	}
 
 	// Failed: pod has restarted ≥3 times (CrashLoopBackOff threshold) AND
 	// isn't currently Ready. Stays Failed until restarts settle.
 	if info.restartCount >= 3 && !info.ready {
-		return driverv1alpha1.DriverNodeStateFailed
+		return driverv1alpha1.DriverNodeStateFailed,
+			ReasonBuilderCrashLoop,
+			fmt.Sprintf("builder pod CrashLoopBackOff (restarts=%d); kubectl logs the pod for the underlying error (rmmod / build / insmod / missing headers)", info.restartCount)
 	}
 
 	// Done: pod is Ready against the target version.
@@ -438,27 +527,33 @@ func computeDriverNodeState(
 			// We cordoned this node but haven't uncordoned yet — between
 			// successful insmod and the next reconcile that calls
 			// uncordonReadyNodes. Surface as Uncordoning.
-			return driverv1alpha1.DriverNodeStateUncordoning
+			return driverv1alpha1.DriverNodeStateUncordoning,
+				ReasonUncordoning,
+				"build succeeded; cordon will be lifted on next reconcile"
 		}
-		return driverv1alpha1.DriverNodeStateDone
+		return driverv1alpha1.DriverNodeStateDone, ReasonReady, ""
 	}
 
 	// If we have a builder pod templated against the target version (but
 	// it isn't Ready yet), the node is mid-Upgrading regardless of cordon
 	// state.
 	if info.version == target {
-		return driverv1alpha1.DriverNodeStateUpgrading
+		return driverv1alpha1.DriverNodeStateUpgrading,
+			ReasonInstalling,
+			"builder pod running; waiting on readiness probe (cat /sys/module/tenstorrent/version)"
 	}
 
 	// Builder pod targets an older version (DS hasn't rolled this node
 	// yet) but we've already cordoned → drain is in progress.
 	if cordonedByUs {
-		return driverv1alpha1.DriverNodeStateDraining
+		return driverv1alpha1.DriverNodeStateDraining,
+			ReasonDraining,
+			"node cordoned; evicting /dev/tenstorrent holders before builder rolls"
 	}
 
 	// No cordon yet — first reconcile after a version bump, or
 	// drain.enable=false.
-	return driverv1alpha1.DriverNodeStatePending
+	return driverv1alpha1.DriverNodeStatePending, "", ""
 }
 
 func setDriverConditions(cr *driverv1alpha1.TenstorrentDriverPolicy) {

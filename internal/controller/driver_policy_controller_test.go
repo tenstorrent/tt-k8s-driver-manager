@@ -6,6 +6,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 
 	driverv1alpha1 "github.com/tenstorrent/tt-k8s-driver-manager/api/driver/v1alpha1"
 )
@@ -320,4 +321,173 @@ func findCondition(conds []metav1.Condition, t string) *metav1.Condition {
 		}
 	}
 	return nil
+}
+
+// TestComputeDriverNodeStateReason covers every Reason code the
+// controller can emit. Each case is the minimal pod/node signal-set
+// that should pin down exactly one (state, reason) pair — so if a
+// future refactor accidentally promotes one signal over another (e.g.
+// CrashLoop catching a host-managed node before the label check), one
+// of these cases breaks.
+func TestComputeDriverNodeStateReason(t *testing.T) {
+	cr := newDriverCR() // spec.version=2.8.0
+
+	cases := []struct {
+		name       string
+		node       *corev1.Node
+		info       podInfo
+		wantState  driverv1alpha1.DriverNodeState
+		wantReason string
+	}{
+		{
+			name: "host-managed via install-mode label trumps everything else",
+			node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{LabelInstallMode: "host"},
+			}},
+			// Even if the pod is CrashLooping, the install-mode label means
+			// the user is running a host-managed setup — surface that, not
+			// the (irrelevant) builder churn.
+			info:       podInfo{restartCount: 99},
+			wantState:  driverv1alpha1.DriverNodeStateHostManaged,
+			wantReason: ReasonHostManagedKMD,
+		},
+		{
+			name:       "image pull failure surfaces as BuilderImagePullFailed",
+			node:       &corev1.Node{},
+			info:       podInfo{waitingReason: "ImagePullBackOff"},
+			wantState:  driverv1alpha1.DriverNodeStateFailed,
+			wantReason: ReasonBuilderImagePullFailed,
+		},
+		{
+			name:       "ErrImagePull also maps to BuilderImagePullFailed",
+			node:       &corev1.Node{},
+			info:       podInfo{waitingReason: "ErrImagePull"},
+			wantState:  driverv1alpha1.DriverNodeStateFailed,
+			wantReason: ReasonBuilderImagePullFailed,
+		},
+		{
+			name:       "CrashLoop after threshold",
+			node:       &corev1.Node{},
+			info:       podInfo{restartCount: 3},
+			wantState:  driverv1alpha1.DriverNodeStateFailed,
+			wantReason: ReasonBuilderCrashLoop,
+		},
+		{
+			name:       "ready at target = Done",
+			node:       &corev1.Node{},
+			info:       podInfo{ready: true, version: "2.8.0"},
+			wantState:  driverv1alpha1.DriverNodeStateDone,
+			wantReason: ReasonReady,
+		},
+		{
+			name: "ready at target but still cordoned = Uncordoning",
+			node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{AnnoDriverCordonedBy: cr.Name},
+			}},
+			info:       podInfo{ready: true, version: "2.8.0"},
+			wantState:  driverv1alpha1.DriverNodeStateUncordoning,
+			wantReason: ReasonUncordoning,
+		},
+		{
+			name:       "pod templated at target but not ready yet = Upgrading/Installing",
+			node:       &corev1.Node{},
+			info:       podInfo{version: "2.8.0"},
+			wantState:  driverv1alpha1.DriverNodeStateUpgrading,
+			wantReason: ReasonInstalling,
+		},
+		{
+			name: "cordoned by us, pod still on old version = Draining",
+			node: &corev1.Node{ObjectMeta: metav1.ObjectMeta{
+				Annotations: map[string]string{AnnoDriverCordonedBy: cr.Name},
+			}},
+			info:       podInfo{version: "2.7.0"},
+			wantState:  driverv1alpha1.DriverNodeStateDraining,
+			wantReason: ReasonDraining,
+		},
+		{
+			name:       "nothing happening yet = Pending with empty reason",
+			node:       &corev1.Node{},
+			info:       podInfo{},
+			wantState:  driverv1alpha1.DriverNodeStatePending,
+			wantReason: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state, reason, _ := computeDriverNodeStateReason(tc.node, tc.info, cr)
+			if state != tc.wantState {
+				t.Errorf("state = %q; want %q", state, tc.wantState)
+			}
+			if reason != tc.wantReason {
+				t.Errorf("reason = %q; want %q", reason, tc.wantReason)
+			}
+		})
+	}
+}
+
+// TestRecordNodeStateEvent confirms the event recorder is wired up: a
+// failure-shape reason gets EventTypeWarning, a happy-path reason gets
+// Normal, and a nil Recorder is a safe no-op (so unit tests / envtest
+// without a manager don't NPE).
+func TestRecordNodeStateEvent(t *testing.T) {
+	cr := newDriverCR()
+
+	t.Run("Warning for BuilderCrashLoop", func(t *testing.T) {
+		fr := record.NewFakeRecorder(4)
+		r := &DriverPolicyReconciler{Recorder: fr}
+		r.recordNodeStateEvent(cr, "e01cs01",
+			driverv1alpha1.DriverNodeStateFailed, ReasonBuilderCrashLoop, "boom")
+		select {
+		case evt := <-fr.Events:
+			if !strings.HasPrefix(evt, "Warning ") {
+				t.Errorf("event type = %q; want Warning prefix", evt)
+			}
+			if !strings.Contains(evt, ReasonBuilderCrashLoop) {
+				t.Errorf("event %q missing reason %q", evt, ReasonBuilderCrashLoop)
+			}
+			if !strings.Contains(evt, "e01cs01") {
+				t.Errorf("event %q missing node name", evt)
+			}
+		default:
+			t.Fatal("no event recorded")
+		}
+	})
+
+	t.Run("Normal for HostManagedKMD", func(t *testing.T) {
+		fr := record.NewFakeRecorder(4)
+		r := &DriverPolicyReconciler{Recorder: fr}
+		r.recordNodeStateEvent(cr, "e01cs02",
+			driverv1alpha1.DriverNodeStateHostManaged, ReasonHostManagedKMD, "DKMS detected")
+		select {
+		case evt := <-fr.Events:
+			if !strings.HasPrefix(evt, "Normal ") {
+				t.Errorf("event type = %q; want Normal prefix", evt)
+			}
+			if !strings.Contains(evt, ReasonHostManagedKMD) {
+				t.Errorf("event %q missing reason %q", evt, ReasonHostManagedKMD)
+			}
+		default:
+			t.Fatal("no event recorded")
+		}
+	})
+
+	t.Run("nil Recorder is a no-op (no NPE)", func(t *testing.T) {
+		r := &DriverPolicyReconciler{}
+		// Just shouldn't panic.
+		r.recordNodeStateEvent(cr, "e01cs03",
+			driverv1alpha1.DriverNodeStateHostManaged, ReasonHostManagedKMD, "")
+	})
+
+	t.Run("empty reason is a no-op", func(t *testing.T) {
+		fr := record.NewFakeRecorder(4)
+		r := &DriverPolicyReconciler{Recorder: fr}
+		r.recordNodeStateEvent(cr, "e01cs04",
+			driverv1alpha1.DriverNodeStatePending, "", "")
+		select {
+		case evt := <-fr.Events:
+			t.Errorf("unexpected event recorded for empty reason: %q", evt)
+		default:
+		}
+	})
 }

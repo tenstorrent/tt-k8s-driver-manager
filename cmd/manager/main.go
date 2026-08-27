@@ -54,8 +54,9 @@ func main() {
 	}
 
 	if err := (&controller.DriverPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("tt-k8s-driver-manager"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenstorrentDriverPolicy")
 		os.Exit(1)

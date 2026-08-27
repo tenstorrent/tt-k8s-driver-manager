@@ -3,6 +3,44 @@
 Common failures, ordered by how often they bite. Each entry has the
 symptom you see in `kubectl`, the root cause, and the fix.
 
+## Why isn't my driver installing?
+
+Two places to look first:
+
+```bash
+# Per-node status with reason codes (HostManagedKMD, BuilderCrashLoop, ...)
+kubectl describe ttdp <name>
+
+# Event stream — same reason codes, filterable across CRs
+kubectl get events --field-selector involvedObject.name=<ttdp>
+```
+
+`.status.nodes[]` shows each node's `state`, `reason`, and `message`:
+
+```
+Status:
+  Nodes:
+    Name:    e01cs01
+    State:   HostManaged
+    Reason:  HostManagedKMD
+    Message: DKMS / host-managed kmd detected; operator standing down ...
+```
+
+Reason codes the controller emits today:
+
+| Reason | State | Meaning |
+|---|---|---|
+| `HostManagedKMD` | `HostManaged` | DKMS signals on host; operator stood down. Expected — see [migrating-from-dkms.md](migrating-from-dkms.md) if you want to take over. |
+| `BuilderImagePullFailed` | `Failed` | kubelet can't pull the builder image. Check `imagePullSecrets` on the installer SA. |
+| `BuilderCrashLoop` | `Failed` | Builder pod restarted ≥3x. Logs distinguish: rmmod refused, build failed, insmod failed, missing headers. |
+| `Installing` | `Upgrading` | Builder pod running; readiness probe not yet passing. |
+| `Cordoning` / `Draining` / `Uncordoning` | (same) | Drain machinery in flight. |
+| `Ready` | `Done` | Pod is Ready against the target version. |
+
+Each state-or-reason transition also fires a Kubernetes Event, so a
+`kubectl describe ttdp` shows the trail without operators having to
+`kubectl logs` the controller.
+
 ## ImagePullBackOff on the driver/flasher pods
 
 ```

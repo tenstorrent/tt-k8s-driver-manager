@@ -143,6 +143,11 @@ Three signals to confirm the operator picked the node up:
 # install-mode label flips host → container
 kubectl get nodes -L driver.tenstorrent.com/install-mode
 
+# Per-node status: the node moves from State=HostManaged /
+# Reason=HostManagedKMD to State=Upgrading then Done. A k8s Event
+# is fired on each transition (visible in `kubectl describe ttdp`).
+kubectl describe ttdp <ttdp-name>
+
 # Builder pod logs: cloning tt-kmd, running make modules, insmod
 kubectl -n tt-k8s-driver-manager-system logs \
   -l driver.tenstorrent.com/cr=<ttdp-name> \

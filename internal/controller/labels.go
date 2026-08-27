@@ -73,3 +73,60 @@ const MessageDrainTimeoutPrefix = "drain timeout after "
 // refuse to flash to avoid running tt-flash concurrent with whatever
 // the human cordoned the node for.
 const MessageExternalCordon = "node is cordoned but not by this operator"
+
+// Driver reason codes — stable, programmatic identifiers for why a
+// node is in its current DriverNodeStatus.State. Surface in two places:
+//
+//  1. cr.status.nodes[].reason — picked up by `kubectl describe ttdp`.
+//  2. The Reason field on emitted k8s Events so `kubectl get events
+//     --field-selector reason=HostManagedKMD` works for fleet-wide
+//     diagnosis.
+//
+// Only add codes the controller actually has a code path for —
+// inventing reasons that never fire is worse than no reason. Keep
+// CamelCase, no spaces, stable across releases (these strings flow into
+// scripts / dashboards).
+const (
+	// ReasonHostManagedKMD: builder pod detected DKMS signals
+	// (/var/lib/dkms/tenstorrent or /usr/src/tenstorrent-*) and labeled
+	// the node install-mode=host. Operator has stood down on this node.
+	ReasonHostManagedKMD = "HostManagedKMD"
+
+	// ReasonBuilderImagePullFailed: kubelet can't pull the builder
+	// image (private registry, missing imagePullSecrets, network).
+	ReasonBuilderImagePullFailed = "BuilderImagePullFailed"
+
+	// ReasonBuilderCrashLoop: builder pod has restarted ≥3 times and
+	// is still NotReady. Covers the catch-all failure shapes the
+	// entrypoint can hit and exit non-zero on: rmmod refused (refcnt
+	// not drained), make / dkms build failed, insmod failed, missing
+	// host kernel-build tree. The pod's logs distinguish them; the
+	// status surface keeps to one code so the API doesn't lie about
+	// which the controller actually detected (it doesn't — it just
+	// sees "the pod keeps dying").
+	ReasonBuilderCrashLoop = "BuilderCrashLoop"
+
+	// ReasonInstalling: pod's templated TT_KMD_VERSION matches the
+	// CR's spec.version but the readiness probe isn't passing yet —
+	// either still building or insmod hasn't completed.
+	ReasonInstalling = "Installing"
+
+	// ReasonReady: pod is Ready against the target version. Emitted
+	// once per state-transition into Done.
+	ReasonReady = "Ready"
+
+	// ReasonDraining: this CR cordoned the node and is waiting on
+	// pass-1/pass-2 eviction to drain /dev/tenstorrent holders before
+	// the builder pod rolls.
+	ReasonDraining = "Draining"
+
+	// ReasonCordoning: node has been cordoned by this CR; pre-drain.
+	ReasonCordoning = "Cordoning"
+
+	// ReasonUncordoning: pod is Ready at target; the cordon we placed
+	// has not yet been lifted.
+	ReasonUncordoning = "Uncordoning"
+
+	// ReasonPaused: spec.paused=true, controller is idle.
+	ReasonPaused = "Paused"
+)

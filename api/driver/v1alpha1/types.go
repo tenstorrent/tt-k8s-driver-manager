@@ -196,6 +196,15 @@ type DriverNodeStatus struct {
 	// State is the per-node upgrade state.
 	State DriverNodeState `json:"state"`
 
+	// Reason is a stable, programmatic CamelCase code explaining why the
+	// node is in its current State — populated for non-trivial outcomes
+	// (HostManagedKMD, BuilderImagePullFailed, BuilderCrashLoop, ...) so
+	// `kubectl describe ttdp` surfaces the cause without digging into
+	// operator logs. Empty when the state is self-explanatory (e.g. a
+	// fresh Pending node with nothing wrong).
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
 	// CurrentVersion is the tt-kmd version currently loaded on this node,
 	// reported by the installer pod's TT_KMD_VERSION env (ground-truth
 	// for what was last successfully installed).
@@ -217,12 +226,19 @@ type DriverNodeStatus struct {
 //
 //	Pending → Cordoning → Draining → Upgrading → Uncordoning → Done
 //	                                                       ↘ Failed
+//	                                                       ↘ HostManaged
 //
 // Cordoning / Draining / Uncordoning are only visited when
 // spec.upgradePolicy.drain.enable is true; otherwise the controller goes
 // straight from Pending → Upgrading → Done.
 //
-// +kubebuilder:validation:Enum=Pending;Cordoning;Draining;Upgrading;Uncordoning;Done;Failed
+// HostManaged is a terminal non-failure: the node's host already owns
+// the kmd install (DKMS / apt / tt-ansible) and the operator has stood
+// down. Distinct from Done so operators can tell the difference between
+// "operator installed it" and "host installed it; operator is idle"
+// without inspecting the install-mode label.
+//
+// +kubebuilder:validation:Enum=Pending;Cordoning;Draining;Upgrading;Uncordoning;Done;Failed;HostManaged
 type DriverNodeState string
 
 const (
@@ -233,6 +249,7 @@ const (
 	DriverNodeStateUncordoning DriverNodeState = "Uncordoning"
 	DriverNodeStateDone        DriverNodeState = "Done"
 	DriverNodeStateFailed      DriverNodeState = "Failed"
+	DriverNodeStateHostManaged DriverNodeState = "HostManaged"
 )
 
 // +kubebuilder:object:root=true

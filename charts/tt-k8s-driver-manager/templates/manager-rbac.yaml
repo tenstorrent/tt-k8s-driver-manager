@@ -42,6 +42,12 @@ rules:
   - apiGroups: ["apps"]
     resources: ["daemonsets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Event recorder uses these to surface per-node reason codes
+  # (HostManagedKMD, BuilderCrashLoop, ...) so `kubectl describe ttdp`
+  # shows the cause without scraping controller logs.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
