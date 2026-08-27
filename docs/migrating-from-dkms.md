@@ -96,51 +96,24 @@ kubectl -n tt-operator-system wait --for=delete pod \
 This is the same label the controller flips during a driver upgrade —
 see [Deploy gates](driver.md#deploy-gates).
 
-The gate affinity ships in the
-[tt-operator](https://docs.tenstorrent.com/tt-operator/) umbrella
-chart's values, not in the telemetry subchart's own defaults. If you
-installed telemetry standalone, add the same `NotIn ["false"]`
-expression to `daemonset.affinity` first, or the label has no effect.
+The gate clause is a default of the telemetry subchart itself
+(`daemonset.affinity`), ANDed into both arms of its node-selection OR
+(`tenstorrent.com/has-tt` and NFD's PCI label), so it is in effect for
+standalone installs too. The
+[tt-operator](https://docs.tenstorrent.com/tt-operator/) umbrella pins
+its own override of the same key — a single term keyed on the NFD label
+— which carries the gate clause as well. Either way the label works; the
+only way to lose it is a hand-written `daemonset.affinity` that omits
+`NotIn ["false"]`.
 
 ### Fabric Manager
 
-No deploy gate ships for the fabric-manager agent, so give it one. Add
-the gate key to the agent's affinity and to the driver-manager
-controller's gate list, so later driver upgrades stand the agent down
-automatically too:
-
-```yaml
-# tt-operator umbrella chart values
-tt-fabric-manager:
-  agent:
-    affinity:
-      nodeAffinity:
-        requiredDuringSchedulingIgnoredDuringExecution:
-          nodeSelectorTerms:
-            - matchExpressions:
-                - key: feature.node.kubernetes.io/pci-1200_1e52.present
-                  operator: In
-                  values: ["true"]
-                - key: tenstorrent.com/deploy.tt-fabric-manager
-                  operator: NotIn
-                  values: ["false"]
-
-tt-k8s-driver-manager:
-  controller:
-    deployGates:
-      - "tenstorrent.com/deploy.tt-telemetry"
-      - "tenstorrent.com/deploy.tt-fabric-manager"
-```
-
-`agent.affinity` replaces the agent's default node selection outright.
-The expression above keys off the PCI label applied by NFD; if your
-cluster labels Tenstorrent nodes by hand with
-`tenstorrent.com/has-tt=true` instead, swap the first expression to
-match that. Both expressions sit in **one** `matchExpressions` list so
-they are ANDed — a second `nodeSelectorTerms` entry would be an OR and
-would let the agent schedule through the gate.
-
-After `helm upgrade`, gate the node:
+As of
+[tt-fabric-manager](https://docs.tenstorrent.com/tt-fabric-manager/)
+0.2.29 the agent DaemonSet ships the same gate by default —
+`tenstorrent.com/deploy.tt-fabric-manager NotIn ["false"]`, repeated on
+both arms of its node-selection OR. Nothing to add to your values; label
+the node:
 
 ```bash
 kubectl label node "$NODE" tenstorrent.com/deploy.tt-fabric-manager=false --overwrite
@@ -149,11 +122,34 @@ kubectl -n tt-operator-system wait --for=delete pod \
   --field-selector spec.nodeName="$NODE" --timeout=2m
 ```
 
-For a one-off maintenance window where you don't want to change chart
-values, `helm upgrade --set tt-fabric-manager.enabled=false` removes the
-agents fleet-wide instead. Fine for a single-node bring-up; for a
-rolling fleet migration prefer the per-node gate, which keeps fabric
-management up everywhere else.
+On 0.2.28 and earlier no gate ships and the label does nothing — bump
+the subchart, or use the fleet-wide fallback below.
+
+Two things to know before overriding anything:
+
+- `agent.affinity` replaces the agent's default node selection
+  **outright**, gate included. If you set it, repeat the gate expression
+  in every `nodeSelectorTerms` entry: terms are OR'd and expressions
+  within a term are AND'd, so one term missing the gate lets the agent
+  schedule straight through it.
+- The driver-manager's own `controller.deployGates` still defaults to
+  telemetry only. Add the fabric-manager key so later driver upgrades
+  stand the agent down automatically too:
+
+  ```yaml
+  # tt-operator umbrella chart values
+  tt-k8s-driver-manager:
+    controller:
+      deployGates:
+        - "tenstorrent.com/deploy.tt-telemetry"
+        - "tenstorrent.com/deploy.tt-fabric-manager"
+  ```
+
+For a one-off maintenance window where you don't want to touch chart
+values at all, `helm upgrade --set tt-fabric-manager.enabled=false`
+removes the agents fleet-wide instead. Fine for a single-node bring-up;
+for a rolling fleet migration prefer the per-node gate, which keeps
+fabric management up everywhere else.
 
 ### Confirm the device is free
 

@@ -60,7 +60,9 @@ controller's pass-1 drain, and being DaemonSets they outlive
 `kubectl drain --ignore-daemonsets`. Stand them down with the
 [deploy-gate labels](driver.md#deploy-gates) — the controller does this for you
 during an upgrade for every key in `controller.deployGates`, which by
-default covers telemetry only.
+default covers telemetry only. The fabric-manager agent honors
+`tenstorrent.com/deploy.tt-fabric-manager` as of tt-fabric-manager
+0.2.29; add that key to `deployGates` to have upgrades cover it too.
 
 ## `/bin/sh: 1: gcc-12: not found`
 
