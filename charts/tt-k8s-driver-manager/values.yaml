@@ -181,6 +181,37 @@ vfioManager:
   # Off by default: in production the DaemonSet restarts and re-asserts, and
   # handing devices back mid-roll only churns the driver.
   restoreOnExit: false
+  # -- Raise vfio_iommu_type1's dma_entry_limit to this value at startup. The
+  # kernel default (65535) is short of what a Galaxy guest needs to map every
+  # device BAR; running out surfaces as an opaque VFIO_IOMMU_MAP_DMA failure
+  # at VM start. 0 leaves the tunable alone. Galaxy hosts want 524288.
+  dmaEntryLimit: 0
+  # Temporary Galaxy workaround. The PCIe switch on Galaxy hosts reports
+  # link-down when vfio-pci resets a device, and pciehp treats that as a
+  # surprise removal — the passthrough target disappears mid-bind. The
+  # tenstorrent-simple stub calls pci_ignore_hotplug() on each device and then
+  # declines the bind, leaving it for vfio-pci. Remove this once the switch
+  # firmware is fixed.
+  hotplugStub:
+    # -- Build and load the tenstorrent-simple PCI stub in an initContainer,
+    # and probe each device through it before binding to vfio-pci. Required
+    # for Galaxy passthrough; a no-op cost on other hardware.
+    enabled: false
+    image:
+      # -- hotplug-stub image repository.
+      repository: ghcr.io/tenstorrent/tt-k8s-driver-manager-hotplug-stub
+      # -- hotplug-stub image tag; falls back to .Chart.AppVersion when empty.
+      tag: ""
+      # -- hotplug-stub image pull policy.
+      pullPolicy: IfNotPresent
+    # -- PCI driver name the stub registers. Only change alongside the module
+    # source.
+    driverName: tenstorrent-simple
+    # -- Host directory holding the compiled .ko, keyed by kernel version, so
+    # a pod restart skips the compile.
+    cacheDir: /var/cache/tt-hotplug-stub
+    # -- hotplug-stub initContainer resource requests/limits.
+    resources: {}
   # -- Extra arguments appended to the vfio-manage command line.
   extraArgs: []
   # -- Port for the Prometheus /metrics and /healthz endpoints (0 disables

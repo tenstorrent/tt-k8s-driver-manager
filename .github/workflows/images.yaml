@@ -1,6 +1,6 @@
 name: images
 
-# Builds and pushes the four container images this repo produces:
+# Builds and pushes the five container images this repo produces:
 #   - controller: ghcr.io/tenstorrent/tt-k8s-driver-manager
 #   - builder:    ghcr.io/tenstorrent/tt-k8s-driver-manager-builder
 #                 (containerized tt-kmd build: clones tt-kmd, builds
@@ -12,6 +12,10 @@ name: images
 #                 (vfio-manage bind daemon. Shares the controller's Go
 #                  module, hence the repo-root context, but needs kmod at
 #                  runtime so it cannot ride the distroless base.)
+#   - hotplug-stub: ghcr.io/tenstorrent/tt-k8s-driver-manager-hotplug-stub
+#                 (builds + insmods the tenstorrent-simple PCI stub against
+#                  the host kernel. initContainer on the vfio DaemonSet;
+#                  temporary Galaxy hotplug workaround.)
 #
 # Versioning model (ported from tenstorrent/tt-fabric-manager):
 #
@@ -46,6 +50,7 @@ env:
   BUILDER_IMAGE:    ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-builder
   FLASHER_IMAGE:    ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-flasher
   VFIO_IMAGE:       ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-vfio
+  STUB_IMAGE:       ghcr.io/${{ github.repository_owner }}/tt-k8s-driver-manager-hotplug-stub
 
 jobs:
   build:
@@ -69,6 +74,10 @@ jobs:
             context: .
             dockerfile: images/vfio-manage/Dockerfile
             image_env: VFIO_IMAGE
+          - name: hotplug-stub
+            context: images/hotplug-stub
+            dockerfile: images/hotplug-stub/Dockerfile
+            image_env: STUB_IMAGE
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

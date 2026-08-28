@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +19,12 @@ import (
 	"github.com/tenstorrent/tt-k8s-driver-manager/internal/vfio/metrics"
 )
 
-const vfioPCIDriver = "vfio-pci"
+const (
+	vfioPCIDriver = "vfio-pci"
+	// vfioIOMMUModule owns the dma_entry_limit tunable raised by
+	// SetDMAEntryLimit.
+	vfioIOMMUModule = "vfio_iommu_type1"
+)
 
 // sysfsRoot is the mount point of the host's sysfs. Overridden by tests to
 // point at a fixture tree; in the DaemonSet the host /sys is mounted here.
@@ -35,6 +41,7 @@ var bdfRE = regexp.MustCompile(`^[a-f0-9]{4}:[a-f0-9]{2}:[a-f0-9]{2}\.[0-9a-f]$`
 type Binder struct {
 	cfg             *config.Config
 	restoreOnExit   bool
+	hotplugStub     string            // stub driver probed before binding; empty disables the pass
 	originalDrivers map[string]string // BDF → driver the device was on before we touched it
 }
 
@@ -46,6 +53,13 @@ func New(cfg *config.Config, restoreOnExit bool) *Binder {
 		restoreOnExit:   restoreOnExit,
 		originalDrivers: make(map[string]string),
 	}
+}
+
+// SetHotplugStub enables the pre-bind hotplug-suppression pass, probing each
+// device through the named stub driver before handing it to vfio-pci. Empty
+// (the default) skips the pass entirely.
+func (b *Binder) SetHotplugStub(driver string) {
+	b.hotplugStub = driver
 }
 
 // RunOnce performs one bind-assertion pass: scan every PCI device, and bind
@@ -82,7 +96,7 @@ func (b *Binder) RunOnce() error {
 			b.originalDrivers[dev.BDF] = dev.OriginalDriver
 		}
 
-		if err := bindToVFIO(dev); err != nil {
+		if err := bindToVFIO(dev, b.hotplugStub); err != nil {
 			log.Printf("binder: failed to bind %s: %v", dev.BDF, err)
 			metrics.BindErrors.WithLabelValues("bind").Inc()
 		} else {
@@ -225,12 +239,22 @@ func (b *Binder) matchesConfigName(dev pciDevice) (string, bool) {
 }
 
 // bindToVFIO unbinds a device from its current driver and binds it to vfio-pci.
-func bindToVFIO(dev pciDevice) error {
+// When hotplugStub is set, the device is first probed through that stub driver
+// to suppress PCIe hotplug (see suppressHotplug).
+func bindToVFIO(dev pciDevice, hotplugStub string) error {
 	base := filepath.Join(pciDevicesDir(), dev.BDF)
 
 	if dev.OriginalDriver != "" && dev.OriginalDriver != vfioPCIDriver {
 		if err := writeFile(filepath.Join(base, "driver", "unbind"), dev.BDF); err != nil {
 			return fmt.Errorf("unbind from %s: %w", dev.OriginalDriver, err)
+		}
+	}
+
+	// Between the unbind and the vfio-pci bind is the only point where the
+	// device is guaranteed unbound, which is what drivers_probe needs.
+	if hotplugStub != "" {
+		if err := suppressHotplug(dev.BDF, hotplugStub); err != nil {
+			return err
 		}
 	}
 
@@ -244,6 +268,70 @@ func bindToVFIO(dev pciDevice) error {
 		// Clear the override so a failed bind doesn't strand the device.
 		_ = clearDriverOverride(overridePath)
 		return fmt.Errorf("bind to vfio-pci: %w", err)
+	}
+
+	return nil
+}
+
+// suppressHotplug probes an unbound device through the stub driver so the
+// stub can call pci_ignore_hotplug() on it. The stub's probe returns -ENODEV
+// by design, so a successful pass leaves the device unbound and ready for the
+// vfio-pci bind that follows — which overwrites driver_override on its way.
+//
+// Without this, a Galaxy PCIe switch reports link-down when vfio-pci resets
+// the device and pciehp tears it off the bus mid-bind.
+func suppressHotplug(bdf, stubDriver string) error {
+	overridePath := filepath.Join(pciDevicesDir(), bdf, "driver_override")
+
+	if err := writeFile(overridePath, stubDriver); err != nil {
+		return fmt.Errorf("set driver_override to %s: %w", stubDriver, err)
+	}
+
+	if err := writeFile(filepath.Join(sysfsRoot, "bus/pci/drivers_probe"), bdf); err != nil {
+		// Leave no override behind, or the device is stranded on a driver
+		// that refuses to bind it.
+		_ = clearDriverOverride(overridePath)
+		return fmt.Errorf("probe %s through %s: %w", bdf, stubDriver, err)
+	}
+
+	return nil
+}
+
+// HotplugStubRegistered reports whether the named stub driver is registered
+// with the PCI bus. The initContainer is what builds and loads it, so a false
+// here means that step did not run or did not succeed.
+func HotplugStubRegistered(driver string) bool {
+	_, err := os.Stat(driverDir(driver))
+	return err == nil
+}
+
+// SetDMAEntryLimit raises vfio_iommu_type1's dma_entry_limit. The default
+// (65535) is well short of what a Galaxy guest needs to map every device BAR,
+// and exhausting it surfaces as an opaque VFIO_IOMMU_MAP_DMA failure at VM
+// start rather than anything naming the limit.
+func SetDMAEntryLimit(limit int) error {
+	path := filepath.Join(sysfsRoot, "module", vfioIOMMUModule, "parameters/dma_entry_limit")
+
+	if _, err := os.Stat(path); err != nil {
+		out, mErr := exec.Command("modprobe", vfioIOMMUModule).CombinedOutput()
+		if mErr != nil {
+			return fmt.Errorf("modprobe %s: %w (%s)", vfioIOMMUModule, mErr, strings.TrimSpace(string(out)))
+		}
+	}
+
+	want := strconv.Itoa(limit)
+	if err := writeFile(path, want); err != nil {
+		return fmt.Errorf("writing %s: %w", path, err)
+	}
+
+	// The parameter is writable but clamped by the kernel, so read it back
+	// rather than trusting the write.
+	got, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading back %s: %w", path, err)
+	}
+	if strings.TrimSpace(string(got)) != want {
+		return fmt.Errorf("%s is %s after write, expected %s", path, strings.TrimSpace(string(got)), want)
 	}
 
 	return nil

@@ -296,3 +296,92 @@ func TestEnsureVFIOPCILoaded_NoopWhenDriverPresent(t *testing.T) {
 		t.Errorf("EnsureVFIOPCILoaded() = %v; want nil when vfio-pci is present", err)
 	}
 }
+
+func TestRunOnce_HotplugStubProbedBeforeBind(t *testing.T) {
+	f := newFakeSysfs(t)
+	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "tenstorrent")
+	f.addDriver(t, "tenstorrent-simple")
+
+	b := New(wormholeConfig(), false)
+	b.SetHotplugStub("tenstorrent-simple")
+	if err := b.RunOnce(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The stub only gets a shot at the device via drivers_probe.
+	if got := f.read(t, "bus/pci/drivers_probe"); got != "0000:01:00.0" {
+		t.Errorf("drivers_probe = %q; want the BDF", got)
+	}
+	// The stub pass must not leave its own override behind — the vfio-pci
+	// bind that follows overwrites it.
+	if got := f.read(t, "bus/pci/devices/0000:01:00.0/driver_override"); got != "vfio-pci" {
+		t.Errorf("driver_override = %q; want vfio-pci", got)
+	}
+	if got := f.read(t, "bus/pci/drivers/vfio-pci/bind"); got != "0000:01:00.0" {
+		t.Errorf("vfio-pci/bind = %q; want the BDF", got)
+	}
+}
+
+func TestRunOnce_HotplugStubDisabledSkipsProbe(t *testing.T) {
+	f := newFakeSysfs(t)
+	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "tenstorrent")
+
+	if err := New(wormholeConfig(), false).RunOnce(); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.read(t, "bus/pci/drivers_probe"); got != "" {
+		t.Errorf("drivers_probe = %q; want untouched with no stub configured", got)
+	}
+	if got := f.read(t, "bus/pci/drivers/vfio-pci/bind"); got != "0000:01:00.0" {
+		t.Errorf("vfio-pci/bind = %q; want the BDF", got)
+	}
+}
+
+func TestSuppressHotplug_ClearsOverrideWhenProbeFails(t *testing.T) {
+	f := newFakeSysfs(t)
+	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "")
+	f.addDriver(t, "tenstorrent-simple")
+
+	// A failed probe must not strand the device on a driver that refuses to
+	// bind it, so the override is rolled back.
+	if err := os.Remove(filepath.Join(f.root, "bus/pci/drivers_probe")); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := suppressHotplug("0000:01:00.0", "tenstorrent-simple"); err == nil {
+		t.Fatal("suppressHotplug() = nil; want an error when drivers_probe is unwritable")
+	}
+
+	if got := f.read(t, "bus/pci/devices/0000:01:00.0/driver_override"); strings.TrimSpace(got) != "" {
+		t.Errorf("driver_override = %q; want cleared after a failed probe", got)
+	}
+}
+
+func TestHotplugStubRegistered(t *testing.T) {
+	f := newFakeSysfs(t)
+
+	if HotplugStubRegistered("tenstorrent-simple") {
+		t.Error("reported the stub registered before it was loaded")
+	}
+
+	f.addDriver(t, "tenstorrent-simple")
+	if !HotplugStubRegistered("tenstorrent-simple") {
+		t.Error("did not report the stub registered once its driver directory exists")
+	}
+}
+
+func TestSetDMAEntryLimit_WritesAndVerifies(t *testing.T) {
+	f := newFakeSysfs(t)
+	// Present means no modprobe — the test host has no vfio_iommu_type1.
+	mkdir(t, filepath.Join(f.root, "module/vfio_iommu_type1/parameters"))
+	write(t, filepath.Join(f.root, "module/vfio_iommu_type1/parameters/dma_entry_limit"), "65535\n")
+
+	if err := SetDMAEntryLimit(524288); err != nil {
+		t.Fatalf("SetDMAEntryLimit() = %v; want nil", err)
+	}
+
+	if got := f.read(t, "module/vfio_iommu_type1/parameters/dma_entry_limit"); got != "524288" {
+		t.Errorf("dma_entry_limit = %q; want 524288", got)
+	}
+}

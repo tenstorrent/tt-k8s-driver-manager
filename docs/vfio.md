@@ -103,6 +103,49 @@ to container workloads cleanly after you disable passthrough.
   mounts it read-only.
 - **A privileged container.** Writing to `/sys/bus/pci` requires it.
 
+## Galaxy hosts
+
+Galaxy needs one extra step. Its PCIe switch reports a link-down event when
+`vfio-pci` resets a device, and `pciehp` reads that as a surprise removal — so
+the device is torn off the bus part-way through the bind and the passthrough
+target simply disappears.
+
+The workaround is a stub PCI driver, `tenstorrent-simple`. It matches the
+Tenstorrent device IDs, calls `pci_ignore_hotplug()` on each device it is
+offered, and then declines the bind by returning `-ENODEV`. Setting the flag
+is the whole job; the device stays free for `vfio-pci` to claim immediately
+afterwards. `vfio-manage` probes every device through the stub between the
+unbind and the `vfio-pci` bind.
+
+Enable it together with the DMA tunable Galaxy also needs:
+
+```yaml
+vfioManager:
+  enabled: true
+  dmaEntryLimit: 524288
+  hotplugStub:
+    enabled: true
+  devices:
+    - resourceName: tenstorrent.com/wormhole
+      vendorId: "1e52"
+      deviceId: ["401e"]
+```
+
+`hotplugStub.enabled` adds an initContainer that compiles the stub against the
+running kernel and loads it, caching the `.ko` per kernel version under
+`hotplugStub.cacheDir` so later pods skip the compile. It needs the host's
+kernel headers — the same `linux-headers-$(uname -r)` requirement the driver
+builder has.
+
+`dmaEntryLimit` raises `vfio_iommu_type1`'s `dma_entry_limit` from its default
+of 65535. A Galaxy guest maps more device BARs than that allows, and running
+out surfaces as an opaque `VFIO_IOMMU_MAP_DMA` failure at VM start rather than
+anything that names the limit.
+
+Both settings are off by default and cost nothing on other hardware. They are
+temporary: once the Galaxy switch firmware stops reporting spurious link-down
+on reset, the stub and this section go away.
+
 ## Metrics
 
 `vfio-manage` serves its own endpoint on `metricsPort` — separate from the
@@ -124,6 +167,18 @@ lspci -d 1e52: -nn
 
 The IDs are 4 hex digits with no `0x` prefix, and the match is
 case-insensitive.
+
+**On Galaxy, a device disappears from `lspci` during the bind.** That is the
+hotplug removal described in [Galaxy hosts](#galaxy-hosts). Set
+`vfioManager.hotplugStub.enabled=true`. Recover the device with a bus rescan:
+
+```bash
+echo 1 > /sys/bus/pci/rescan
+```
+
+**Pods crash-loop with `hotplug stub driver ... is not registered`.** The
+initContainer did not load the module. Check its logs — the usual cause is
+missing kernel headers for the running kernel on the host.
 
 **A device binds but the VM cannot claim it.** Devices pass through in whole
 IOMMU groups. If other devices share a group, they must all be bound to

@@ -25,6 +25,27 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- if .Values.vfioManager.hotplugStub.enabled }}
+      initContainers:
+        # Builds tenstorrent-simple against the host kernel and insmods it.
+        # An initContainer because vfio-manage fails fast if the stub driver
+        # isn't registered by the time its first bind pass runs.
+        - name: hotplug-stub
+          image: "{{ .Values.vfioManager.hotplugStub.image.repository }}:{{ .Values.vfioManager.hotplugStub.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.vfioManager.hotplugStub.image.pullPolicy }}
+          env:
+            - name: CACHE_ROOT
+              value: {{ .Values.vfioManager.hotplugStub.cacheDir | quote }}
+          securityContext:
+            # insmod needs it.
+            privileged: true
+          resources: {{- toYaml .Values.vfioManager.hotplugStub.resources | nindent 12 }}
+          volumeMounts:
+            - { name: sys, mountPath: /sys }
+            - { name: lib-modules, mountPath: /lib/modules, readOnly: true }
+            - { name: kernel-src, mountPath: /usr/src, readOnly: true }
+            - { name: stub-cache, mountPath: {{ .Values.vfioManager.hotplugStub.cacheDir | quote }} }
+      {{- end }}
       containers:
         - name: vfio-manage
           image: "{{ .Values.vfioManager.image.repository }}:{{ .Values.vfioManager.image.tag | default .Chart.AppVersion }}"
@@ -34,6 +55,12 @@ spec:
             - --bind-interval={{ .Values.vfioManager.bindInterval }}
             {{- if .Values.vfioManager.restoreOnExit }}
             - --restore-on-exit
+            {{- end }}
+            {{- if .Values.vfioManager.hotplugStub.enabled }}
+            - --hotplug-stub-driver={{ .Values.vfioManager.hotplugStub.driverName }}
+            {{- end }}
+            {{- if gt (.Values.vfioManager.dmaEntryLimit | int) 0 }}
+            - --dma-entry-limit={{ .Values.vfioManager.dmaEntryLimit }}
             {{- end }}
             {{- if gt (.Values.vfioManager.metricsPort | int) 0 }}
             - --metrics-addr=:{{ .Values.vfioManager.metricsPort }}
@@ -67,6 +94,15 @@ spec:
           hostPath: { path: /dev/vfio }
         - name: lib-modules
           hostPath: { path: /lib/modules, type: Directory }
+        {{- if .Values.vfioManager.hotplugStub.enabled }}
+        # linux-headers packages put the real build tree under /usr/src and
+        # symlink it from /lib/modules/<kver>/build, so the module build needs
+        # both mounted.
+        - name: kernel-src
+          hostPath: { path: /usr/src, type: Directory }
+        - name: stub-cache
+          hostPath: { path: {{ .Values.vfioManager.hotplugStub.cacheDir | quote }}, type: DirectoryOrCreate }
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "tt-k8s-driver-manager.fullname" . }}-vfio
