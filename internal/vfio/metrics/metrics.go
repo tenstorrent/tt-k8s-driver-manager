@@ -1,0 +1,59 @@
+// Package metrics exposes the Prometheus endpoint for the vfio-manage
+// daemon.
+//
+// This is deliberately separate from internal/metrics: that package
+// registers into controller-runtime's registry, which only exists inside
+// the controller Deployment. vfio-manage is a plain DaemonSet binary with
+// no manager, so it owns a registry and an HTTP server of its own.
+package metrics
+
+import (
+	"log"
+	"net/http"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+var (
+	// DevicesBound tracks PCI devices currently bound to vfio-pci per resource.
+	DevicesBound = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "tt_vfio",
+		Name:      "devices_bound_total",
+		Help:      "Number of PCI devices currently bound to vfio-pci.",
+	}, []string{"resource"})
+
+	// BindErrors counts bind or unbind failures, labelled by action ("bind"/"unbind").
+	BindErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "tt_vfio",
+		Name:      "bind_errors_total",
+		Help:      "Cumulative number of vfio-pci bind/unbind failures.",
+	}, []string{"action"})
+
+	// NoiommuMode is 1 when the kernel is running in noiommu mode.
+	NoiommuMode = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "tt_vfio",
+		Name:      "noiommu_mode",
+		Help:      "1 if vfio-pci is operating in unsafe-noiommu mode, 0 otherwise.",
+	})
+)
+
+func init() {
+	prometheus.MustRegister(DevicesBound, BindErrors, NoiommuMode)
+}
+
+// Serve starts the HTTP metrics server on the given address (e.g. ":9401").
+// It blocks until the server exits.
+func Serve(addr string) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok")) //nolint:errcheck
+	})
+
+	log.Printf("metrics: listening on %s", addr)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Printf("metrics: server exited: %v", err)
+	}
+}

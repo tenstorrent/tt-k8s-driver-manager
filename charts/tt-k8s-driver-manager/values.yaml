@@ -148,3 +148,52 @@ metrics:
     # -- Prometheus metric_relabel_configs applied to scraped samples; the
     # place to drop families you don't want to store.
     metricRelabelings: []
+# -- Privileged DaemonSet that binds Tenstorrent PCI devices to vfio-pci for
+# passthrough into VMs. Off by default: binding a device to vfio-pci takes it
+# away from tt-kmd, so container workloads on that node lose it. Enable only
+# on nodes dedicated to VM passthrough, and scope them with nodeSelector.
+#
+# Whatever advertises these devices to the kubelet must be configured with
+# the same device list — this component only performs the binding.
+vfioManager:
+  # -- Deploy the vfio-manage DaemonSet.
+  enabled: false
+  image:
+    # -- vfio-manage image repository.
+    repository: ghcr.io/tenstorrent/tt-k8s-driver-manager-vfio
+    # -- vfio-manage image tag; falls back to .Chart.AppVersion when empty.
+    tag: ""
+    # -- vfio-manage image pull policy.
+    pullPolicy: IfNotPresent
+  # -- PCI devices to bind. Empty means the DaemonSet runs and binds nothing.
+  #
+  # Example:
+  #   devices:
+  #     - resourceName: tenstorrent.com/wormhole
+  #       vendorId: "1e52"
+  #       deviceId: ["401e"]
+  devices: []
+  # -- How often to re-assert the binding. Each pass is a sysfs scan, so this
+  # is cheap; it exists to recover devices that drift off vfio-pci after a
+  # driver reload without waiting for a pod restart.
+  bindInterval: 30s
+  # -- On SIGTERM, re-bind devices to the driver they were on beforehand.
+  # Off by default: in production the DaemonSet restarts and re-asserts, and
+  # handing devices back mid-roll only churns the driver.
+  restoreOnExit: false
+  # -- Extra arguments appended to the vfio-manage command line.
+  extraArgs: []
+  # -- Port for the Prometheus /metrics and /healthz endpoints (0 disables
+  # both; the liveness probe is dropped with them).
+  metricsPort: 9401
+  # -- vfio-manage container resource requests/limits.
+  resources: {}
+  # -- Restrict the DaemonSet to nodes set aside for VM passthrough.
+  nodeSelector: {}
+  # -- vfio-manage pod affinity.
+  affinity: {}
+  # -- Defaults to tolerating every NoSchedule taint, matching how
+  # accelerator nodes are usually cordoned off.
+  tolerations:
+    - operator: Exists
+      effect: NoSchedule

@@ -37,3 +37,17 @@ Kubernetes: `>=1.27.0-0`
 | metrics.serviceMonitor.metricRelabelings | list | `[]` | Prometheus metric_relabel_configs applied to scraped samples; the place to drop families you don't want to store. |
 | metrics.serviceMonitor.relabelings | list | `[]` | Prometheus relabel_configs applied to the scrape target. |
 | metrics.serviceMonitor.scrapeTimeout | string | `"10s"` | Scrape timeout; must not exceed the interval. |
+| vfioManager | object | `{"affinity":{},"bindInterval":"30s","devices":[],"enabled":false,"extraArgs":[],"image":{"pullPolicy":"IfNotPresent","repository":"ghcr.io/tenstorrent/tt-k8s-driver-manager-vfio","tag":""},"metricsPort":9401,"nodeSelector":{},"resources":{},"restoreOnExit":false,"tolerations":[{"effect":"NoSchedule","operator":"Exists"}]}` | Privileged DaemonSet that binds Tenstorrent PCI devices to vfio-pci for passthrough into VMs. Off by default: binding a device to vfio-pci takes it away from tt-kmd, so container workloads on that node lose it. Enable only on nodes dedicated to VM passthrough, and scope them with nodeSelector.  Whatever advertises these devices to the kubelet must be configured with the same device list — this component only performs the binding. |
+| vfioManager.affinity | object | `{}` | vfio-manage pod affinity. |
+| vfioManager.bindInterval | string | `"30s"` | How often to re-assert the binding. Each pass is a sysfs scan, so this is cheap; it exists to recover devices that drift off vfio-pci after a driver reload without waiting for a pod restart. |
+| vfioManager.devices | list | `[]` | PCI devices to bind. Empty means the DaemonSet runs and binds nothing.  Example:   devices:     - resourceName: tenstorrent.com/wormhole       vendorId: "1e52"       deviceId: ["401e"] |
+| vfioManager.enabled | bool | `false` | Deploy the vfio-manage DaemonSet. |
+| vfioManager.extraArgs | list | `[]` | Extra arguments appended to the vfio-manage command line. |
+| vfioManager.image.pullPolicy | string | `"IfNotPresent"` | vfio-manage image pull policy. |
+| vfioManager.image.repository | string | `"ghcr.io/tenstorrent/tt-k8s-driver-manager-vfio"` | vfio-manage image repository. |
+| vfioManager.image.tag | string | `""` | vfio-manage image tag; falls back to .Chart.AppVersion when empty. |
+| vfioManager.metricsPort | int | `9401` | Port for the Prometheus /metrics and /healthz endpoints (0 disables both; the liveness probe is dropped with them). |
+| vfioManager.nodeSelector | object | `{}` | Restrict the DaemonSet to nodes set aside for VM passthrough. |
+| vfioManager.resources | object | `{}` | vfio-manage container resource requests/limits. |
+| vfioManager.restoreOnExit | bool | `false` | On SIGTERM, re-bind devices to the driver they were on beforehand. Off by default: in production the DaemonSet restarts and re-asserts, and handing devices back mid-roll only churns the driver. |
+| vfioManager.tolerations | list | `[{"effect":"NoSchedule","operator":"Exists"}]` | Defaults to tolerating every NoSchedule taint, matching how accelerator nodes are usually cordoned off. |

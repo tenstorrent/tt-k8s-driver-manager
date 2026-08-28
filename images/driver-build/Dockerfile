@@ -1,8 +1,7 @@
 # UBUNTU_VERSION selects both the base image and the tt-smi release-binary
 # flavor (tt-smi-<v>-ubuntu-<UBUNTU_VERSION>). The binary is a PyInstaller
 # build linked against the glibc of that Ubuntu release, so it must match
-# the host OS — aus2-dev2 hosts run Ubuntu 22.04 (jammy). Bumping the host
-# OS requires bumping this too.
+# the host OS. Bumping the host OS requires bumping this too.
 ARG UBUNTU_VERSION=22.04
 ARG TT_SMI_VERSION=5.2.0
 # tt-kmd's udev rule (MODE=0666 + by-id symlinks) doesn't change between
