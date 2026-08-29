@@ -12,13 +12,6 @@
 // The probe deliberately returns -ENODEV: setting the flag is the entire
 // job, and refusing the bind leaves the device free for vfio-pci to claim
 // immediately afterwards.
-//
-// Temporary. Tracks a Quanta platform issue; delete this module once the
-// switch firmware stops reporting spurious link-down on reset.
-//
-// Vendored from https://github.com/joelsmithTT/hole-thing
-// (hacks/tenstorrent-simple) so the builder never has to reach a personal
-// repo at runtime — which also keeps it working behind an HTTPS proxy.
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
