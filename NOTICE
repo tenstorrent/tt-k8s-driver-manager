@@ -52,7 +52,7 @@ Base container images: golang (BSD-3-Clause), gcr.io/distroless/static
 (Apache-2.0), ubuntu (various; see https://ubuntu.com/legal), and
 curlimages/curl (curl license).
 
-Documentation and images under docs/ are licensed under the Creative Commons
-Attribution 4.0 International License; see LICENSE-DOCS. The docs/ theme
-bundles web-font files (Degular, RM Mono) that are subject to their own font
-licenses and are not covered by the Apache License 2.0 or CC BY 4.0.
+Documentation and images under docs/ are licensed under the Creative
+Commons Attribution 4.0 International License; see LICENSE-DOCS. The
+documentation site loads its web fonts from https://docs.tenstorrent.com at
+render time; no font files are distributed with this repository.
