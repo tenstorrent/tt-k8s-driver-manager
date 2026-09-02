@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 // Package v1alpha1 contains the driver.tenstorrent.com/v1alpha1 API.
 // +kubebuilder:object:generate=true
 // +groupName=driver.tenstorrent.com

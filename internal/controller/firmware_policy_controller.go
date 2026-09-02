@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -203,7 +206,7 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			if ns.State == firmwarev1alpha1.NodeStateDone {
 				// Readback version = what tt-smi reports after a successful
 				// flash. Default is "<spec.version>.0" — same convention as
-				// tt-ansible. Label is for selectors; annotation is a
+				// configuration management. Label is for selectors; annotation is a
 				// human-readable history pointer.
 				readback := cr.Spec.ReadbackVersion
 				if readback == "" {

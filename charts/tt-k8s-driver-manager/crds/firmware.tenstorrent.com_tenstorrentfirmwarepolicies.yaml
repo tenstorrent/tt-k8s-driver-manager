@@ -248,7 +248,7 @@ spec:
                     default: 900
                     description: |-
                       FlashTimeoutSeconds is the per-node Job activeDeadlineSeconds.
-                      Default 900s (matches tt-ansible Galaxy headroom; PCIe-only is typically <120s).
+                      Default 900s, which leaves headroom for Galaxy systems; PCIe-only systems typically finish in under 120s.
                     format: int32
                     minimum: 60
                     type: integer

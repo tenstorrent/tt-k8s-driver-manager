@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # Production-style sample: targets a node pool, drain ON (assumes the
 # cluster has more than one node so cordon/drain is safe).
 apiVersion: firmware.tenstorrent.com/v1alpha1

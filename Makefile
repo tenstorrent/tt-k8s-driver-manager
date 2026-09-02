@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # tt-k8s-driver-manager development targets.
 
 CONTROLLER_GEN  ?= $(shell go env GOPATH)/bin/controller-gen
@@ -17,7 +20,7 @@ controller-gen:
 
 .PHONY: generate
 generate: controller-gen
-	$(CONTROLLER_GEN) object paths=./api/...
+	$(CONTROLLER_GEN) object:headerFile=hack/boilerplate.go.txt paths=./api/...
 	$(CONTROLLER_GEN) crd  paths=./api/...        output:crd:dir=./config/crd/bases
 	$(CONTROLLER_GEN) rbac:roleName=tt-k8s-driver-manager paths=./internal/... output:rbac:dir=./config/rbac
 	# Mirror the generated CRDs into the chart's crds/ dir. Helm packages

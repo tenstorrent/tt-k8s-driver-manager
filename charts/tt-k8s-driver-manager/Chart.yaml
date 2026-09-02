@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 apiVersion: v2
 name: tt-k8s-driver-manager
 description: Manages the host-side software lifecycle for Tenstorrent hardware — tt-kmd kernel module, device firmware, and tt-smi CLI — via TenstorrentDriverPolicy and TenstorrentFirmwarePolicy CRDs.
@@ -5,14 +8,14 @@ type: application
 # Sentinel placeholders. Real version is computed at workflow time from
 # the latest `v*.*.*` git tag + run_number; .github/actions/version/
 # action.yaml does the math, then helm-release.yaml + images.yaml sed
-# 0.0.0 / latest in place before publish. See RELEASING.md (TBD).
+# 0.0.0 / latest in place before publish.
 version: 0.0.0
 appVersion: latest
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/tenstorrent/tt-k8s-driver-manager
 sources:
   - https://github.com/tenstorrent/tt-k8s-driver-manager
-icon: https://raw.githubusercontent.com/tenstorrent/tt-metal/main/docs/source/common/_static/favicon.png
+icon: https://raw.githubusercontent.com/tenstorrent/tt-k8s-driver-manager/main/docs/_static/images/favicon.png
 keywords:
   - tenstorrent
   - accelerator

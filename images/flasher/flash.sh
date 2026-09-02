@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # Flasher entrypoint for tt-operator.
 #
 # Contract — set by the operator's Job template (see internal/controller/job.go):
@@ -160,7 +163,7 @@ if ! tt-flash --no-color flash --fw-tar "$TT_FW_BUNDLE_PATH" ${TT_FLASH_ARGS:-} 
   exit 1
 fi
 
-# Matches the explicit failed_when in tt-ansible's tt_firmware role: a known
+# Matches the host-side provisioning tooling's failure semantics: a known
 # bad-result string can appear with exit code 0.
 if grep -q "Config space reset not completed for device" "$flash_log"; then
   log "ERROR: tt-flash reported 'Config space reset not completed for device' (exit was 0 but device is bad)"
