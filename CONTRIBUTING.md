@@ -78,5 +78,7 @@ change.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the
-[Apache License 2.0](LICENSE).
+By contributing, you agree that your contributions to source code are
+licensed under the [Apache License 2.0](LICENSE), and that your
+contributions to documentation and images under `docs/` are licensed under
+the [Creative Commons Attribution 4.0 International License](LICENSE-DOCS).

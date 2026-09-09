@@ -15,9 +15,11 @@ custom resources (CRs):
 | device firmware | `TenstorrentFirmwarePolicy` CR | flashed on-chip via per-node `tt-flash` Job |
 
 There is one declarative CR per concern rather than a single cluster-wide
-policy object. Each CR is reconciled by one privileged DaemonSet that builds
-`tt-kmd` in a container against the host kernel headers and loads the module
-into the host kernel with `insmod`.
+policy object. `TenstorrentDriverPolicy` is reconciled by a privileged
+DaemonSet that builds `tt-kmd` in a container against the host kernel
+headers and loads it into the host kernel with `insmod`.
+`TenstorrentFirmwarePolicy` is reconciled by a per-node Job that cordons,
+drains, flashes, and uncordons each node in turn.
 
 ## Getting started
 
