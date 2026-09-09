@@ -41,6 +41,56 @@ Each state-or-reason transition also fires a Kubernetes Event, so a
 `kubectl describe ttdp` shows the trail without operators having to
 `kubectl logs` the controller.
 
+## Why isn't my firmware flashing?
+
+Same two places as the driver, one CR kind over:
+
+```bash
+# Per-node status with reason codes (FlashJobFailed, DrainTimeout, ...)
+kubectl describe ttfwp <name>
+
+# Event stream — same reason codes, filterable across CRs
+kubectl get events --field-selector involvedObject.name=<ttfwp>
+```
+
+`.status.nodes[]` shows each node's `state`, `reason`, and `message`:
+
+```
+Status:
+  Nodes:
+    Name:           node-3
+    State:          Pending
+    Reason:         RolloutHalted
+    Message:        another node in this CR is Failed and spec.upgradePolicy.haltOnFailure=true
+    Current Version: 19.8.0.0
+```
+
+Reason codes the firmware controller emits today:
+
+| Reason | State | Meaning |
+|---|---|---|
+| `Flashing` | `Flashing` | Flash Job's pod is running — tt-flash mid-write or doing readback. |
+| `FlasherImagePullFailed` | `Flashing` | kubelet can't pull the flasher image. Check `spec.flasher.image` and `imagePullSecrets`. State stays `Flashing` — the Job's `activeDeadlineSeconds` decides when it's terminal. |
+| `FlashJobFailed` | `Failed` | Job hit a terminal failure: non-zero tt-flash exit, readback mismatch, or the flash deadline. `kubectl logs job/<lastFlashJob>` distinguishes them. |
+| `FlashSucceeded` | `Done` | Job completed and no uncordon was owed. |
+| `Cordoning` / `Draining` / `Uncordoning` | (same) | Drain machinery in flight. |
+| `EvictionBlocked` | `Draining` | A PDB refused an eviction this pass. Retried every reconcile until the drain deadline. |
+| `DrainTimeout` | `Failed` | Drain window expired with pods still holding `/dev/tenstorrent`. Terminal — see the message for the blocking pods. |
+| `ExternalCordon` | `Pending` | Node is cordoned, but not by us. See [Policy never matches](#policy-never-matches-messageexternalcordon). |
+| `NodeConflict` | `Pending` | Node is owned by another `ttfwp`. See [Multiple policies match](#multiple-policies-match-the-same-node-messagenodeconflict). |
+| `Paused` | `Pending` | `spec.paused=true`. |
+| `RolloutHalted` | `Pending` | Another node is `Failed` and `spec.upgradePolicy.haltOnFailure=true` (the default). Fix or exclude the failed node to resume. |
+| `AutoUpgradeDisabled` | `Pending` | `spec.upgradePolicy.autoUpgrade=false` — drift is reported, never acted on. |
+| `TransientAPIError` | `Pending` / `Draining` | An API read blipped mid-observation. Deliberately not `Failed`; clears itself. |
+
+A `Pending` node with **no** reason is the ordinary case: it's ready to
+flash and waiting on a `spec.upgradePolicy.maxParallel` slot.
+
+Each state-or-reason transition also fires a Kubernetes Event, so
+`kubectl describe ttfwp` shows the trail — including a `Flashing` node
+sliding into `FlasherImagePullFailed` and back — without operators
+having to `kubectl logs` the controller.
+
 ## ImagePullBackOff on the driver/flasher pods
 
 ```
@@ -290,6 +340,7 @@ Status:
   Per Node:
     Name:     node-1
     State:    Pending
+    Reason:   ExternalCordon
     Message:  node is cordoned but not by this operator
 ```
 
@@ -342,6 +393,7 @@ Workarounds until #42 ships a fix:
 ```bash
 $ kubectl describe ttfp <name>
 ...
+    Reason:   NodeConflict
     Message:  node is also matched by another firmware policy
 ```
 

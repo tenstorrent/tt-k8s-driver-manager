@@ -182,6 +182,15 @@ type NodeStatus struct {
 	// State is the per-node upgrade state.
 	State NodeState `json:"state"`
 
+	// Reason is a stable, programmatic CamelCase code explaining why the
+	// node is in its current State — populated for non-trivial outcomes
+	// (FlashJobFailed, FlasherImagePullFailed, DrainTimeout, Paused, ...)
+	// so `kubectl describe ttfwp` surfaces the cause without digging into
+	// operator logs. Empty when the state is self-explanatory (e.g. a
+	// Pending node simply waiting on a maxParallel slot).
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
 	// CurrentVersion is the readback fw_bundle_version from the most recent flash.
 	// +optional
 	CurrentVersion string `json:"currentVersion,omitempty"`

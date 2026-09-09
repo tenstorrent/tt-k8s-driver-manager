@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -35,7 +36,8 @@ import (
 // names are deterministic (jobName) so creation is idempotent.
 type FirmwarePolicyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme   *runtime.Scheme
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=firmware.tenstorrent.com,resources=tenstorrentfirmwarepolicies,verbs=get;list;watch;create;update;patch;delete
@@ -44,6 +46,7 @@ type FirmwarePolicyReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups="",resources=pods/eviction,verbs=create
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("ttfwp", req.Name)
@@ -84,19 +87,29 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	nodeStates := make([]firmwarev1alpha1.NodeStatus, 0, len(owned)+len(conflicts))
 
+	// Previously published per-node status, keyed by node name. Read
+	// before we overwrite cr.Status.Nodes: it's what decides whether a
+	// node actually transitioned this reconcile (→ new
+	// LastTransitionTime + a k8s Event) or is sitting in the same
+	// (state, reason) as last time.
+	prev := make(map[string]firmwarev1alpha1.NodeStatus, len(cr.Status.Nodes))
+	for _, ns := range cr.Status.Nodes {
+		prev[ns.Name] = ns
+	}
+
 	// First pass: observe current state without mutating cluster state.
+	// LastTransitionTime is assigned later, once the advance pass below
+	// has settled each node's final state for this reconcile.
 	now := metav1.Now()
 	for _, node := range owned {
-		ns := r.observeNode(ctx, cr, node)
-		ns.LastTransitionTime = now
-		nodeStates = append(nodeStates, ns)
+		nodeStates = append(nodeStates, r.observeNode(ctx, cr, node))
 	}
 	for _, c := range conflicts {
 		nodeStates = append(nodeStates, firmwarev1alpha1.NodeStatus{
-			Name:               c.Name,
-			State:              firmwarev1alpha1.NodeStatePending,
-			Message:            MessageNodeConflict,
-			LastTransitionTime: now,
+			Name:    c.Name,
+			State:   firmwarev1alpha1.NodeStatePending,
+			Reason:  ReasonNodeConflict,
+			Message: MessageNodeConflict,
 		})
 	}
 
@@ -174,6 +187,54 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			logger.Error(advErr, "advance node", "node", ns.Name)
 			continue
 		}
+	}
+
+	// Explain the nodes we deliberately didn't advance. Only fills an
+	// empty reason on a Pending node — a node parked by policy is
+	// otherwise indistinguishable in status from one simply queued
+	// behind maxParallel, which is the single most common "why isn't my
+	// firmware flashing?" question.
+	for i := range nodeStates {
+		ns := &nodeStates[i]
+		if ns.State != firmwarev1alpha1.NodeStatePending || ns.Reason != "" {
+			continue
+		}
+		switch {
+		case !autoUpgrade:
+			ns.Reason = ReasonAutoUpgradeDisabled
+			ns.Message = "spec.upgradePolicy.autoUpgrade=false; reporting drift only"
+		case cr.Spec.Paused:
+			ns.Reason = ReasonPaused
+			ns.Message = "spec.paused=true; controller is not advancing this node"
+		case halted:
+			ns.Reason = ReasonRolloutHalted
+			ns.Message = "another node in this CR is Failed and spec.upgradePolicy.haltOnFailure=true"
+		}
+	}
+
+	// Stamp LastTransitionTime and emit an Event for every node whose
+	// (state, reason) pair changed since the last published status. The
+	// pair — not state alone — is the trigger, so a node that stays
+	// Flashing while its pod slides from running into ImagePullBackOff
+	// still announces the change.
+	for i := range nodeStates {
+		ns := &nodeStates[i]
+		old, hadPrev := prev[ns.Name]
+		if hadPrev && old.State == ns.State && old.Reason == ns.Reason {
+			// Steady state — preserve the original timestamp rather than
+			// rewriting it every 30s requeue.
+			ns.LastTransitionTime = old.LastTransitionTime
+			continue
+		}
+		ns.LastTransitionTime = now
+		// Reason-less transitions stay silent (recordNodeStateEvent
+		// no-ops on an empty reason), which is what keeps a CR that just
+		// matched 40 fresh nodes from opening with 40 events that say
+		// nothing: a node merely queued to flash has no reason. Unlike
+		// the driver side, Pending here can carry a real reason
+		// (NodeConflict, ExternalCordon, Paused, ...) and those must be
+		// announced on first observation.
+		r.recordNodeStateEvent(cr, ns.Name, ns.State, ns.Reason, ns.Message)
 	}
 
 	// Aggregate summary from final per-node states (post-advance) and keep the
@@ -340,6 +401,7 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 	jobExists := err == nil
 	if err != nil && !apierrors.IsNotFound(err) {
 		ns.State = firmwarev1alpha1.NodeStatePending
+		ns.Reason = ReasonTransientAPIError
 		ns.Message = fmt.Sprintf("transient: lookup job: %v", err)
 		return ns
 	}
@@ -352,16 +414,30 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 			// uncordon before declaring Done.
 			if drainEnabled(cr) && node.Annotations[AnnoCordonedBy] == cr.Name {
 				ns.State = firmwarev1alpha1.NodeStateUncordoning
+				ns.Reason = ReasonUncordoning
 			} else {
 				ns.State = firmwarev1alpha1.NodeStateDone
+				ns.Reason = ReasonFlashSucceeded
 			}
 			return ns
 		case completed && !succeeded:
 			ns.State = firmwarev1alpha1.NodeStateFailed
+			ns.Reason = ReasonFlashJobFailed
 			ns.Message = "Flash Job failed; see Job logs"
 			return ns
 		default:
 			ns.State = firmwarev1alpha1.NodeStateFlashing
+			ns.Reason = ReasonFlashing
+			// A flash Job whose pod can't pull its image is
+			// indistinguishable from a slow flash in Job status alone —
+			// it just sits un-completed until activeDeadlineSeconds. Read
+			// the pod's Waiting.Reason so the stall is attributable now
+			// rather than 15 minutes from now. State stays Flashing on
+			// purpose (see ReasonFlasherImagePullFailed).
+			if wr := r.flasherWaitingReason(ctx, job); wr == "ImagePullBackOff" || wr == "ErrImagePull" {
+				ns.Reason = ReasonFlasherImagePullFailed
+				ns.Message = "kubelet: " + wr + " (check the flasher image and imagePullSecrets on the operator ServiceAccount)"
+			}
 			return ns
 		}
 	}
@@ -377,6 +453,7 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 	if !node.Spec.Unschedulable {
 		// Not cordoned yet (or cordon was lost) → Cordoning is the next step.
 		ns.State = firmwarev1alpha1.NodeStateCordoning
+		ns.Reason = ReasonCordoning
 		return ns
 	}
 	if !weCordoned {
@@ -384,6 +461,7 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 		// MessageExternalCordon constant which the advance loop refuses
 		// to act on (same gating as MessageNodeConflict).
 		ns.State = firmwarev1alpha1.NodeStatePending
+		ns.Reason = ReasonExternalCordon
 		ns.Message = MessageExternalCordon
 		return ns
 	}
@@ -393,6 +471,7 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 	devicePods, err := r.listDevicePodsOnNode(ctx, node.Name, force)
 	if err != nil {
 		ns.State = firmwarev1alpha1.NodeStateDraining
+		ns.Reason = ReasonTransientAPIError
 		ns.Message = fmt.Sprintf("transient: list device pods: %v", err)
 		return ns
 	}
@@ -400,6 +479,7 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 		// Check timeout.
 		if elapsed := cordonElapsed(&node); elapsed > drainTimeout(cr) {
 			ns.State = firmwarev1alpha1.NodeStateFailed
+			ns.Reason = ReasonDrainTimeout
 			names := make([]string, 0, len(devicePods))
 			for _, p := range devicePods {
 				names = append(names, p.Namespace+"/"+p.Name)
@@ -409,6 +489,7 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 			return ns
 		}
 		ns.State = firmwarev1alpha1.NodeStateDraining
+		ns.Reason = ReasonDraining
 		ns.Message = fmt.Sprintf("waiting for %d pod(s) to evict", len(devicePods))
 		return ns
 	}
@@ -416,6 +497,85 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 	// Cordoned, no device pods left — ready to spawn the flash Job.
 	ns.State = firmwarev1alpha1.NodeStatePending
 	return ns
+}
+
+// recordNodeStateEvent emits a k8s Event for a node's (state, reason)
+// transition. Type is Warning for the reasons that mean a human has to
+// do something — a failed or stalled flash, a blocked drain, a node we
+// refuse to touch — and Normal for ordinary rollout progress. `Reason`
+// is the stable code; `Message` carries node-name + human context.
+//
+// A nil Recorder is a no-op so unit tests and any caller without a
+// manager can construct the reconciler without wiring one up.
+func (r *FirmwarePolicyReconciler) recordNodeStateEvent(
+	cr *firmwarev1alpha1.TenstorrentFirmwarePolicy,
+	nodeName string,
+	state firmwarev1alpha1.NodeState,
+	reason, msg string,
+) {
+	if r.Recorder == nil || reason == "" {
+		return
+	}
+	evtType := corev1.EventTypeNormal
+	switch reason {
+	case ReasonFlashJobFailed,
+		ReasonFlasherImagePullFailed,
+		ReasonDrainTimeout,
+		ReasonEvictionBlocked,
+		ReasonNodeConflict,
+		ReasonExternalCordon:
+		evtType = corev1.EventTypeWarning
+	}
+	if state == firmwarev1alpha1.NodeStateFailed {
+		evtType = corev1.EventTypeWarning
+	}
+	body := nodeName
+	if msg != "" {
+		body = fmt.Sprintf("%s: %s", nodeName, msg)
+	}
+	r.Recorder.Event(cr, evtType, reason, body)
+}
+
+// flasherWaitingReason returns the raw kubelet
+// ContainerStatus.Waiting.Reason (ImagePullBackOff / ErrImagePull / ...)
+// for the flash Job's pod, or "" when the container isn't waiting, the
+// pod isn't there yet, or the read fails. Best-effort by design: this
+// only enriches the status reason, so a List error must not change the
+// observed state. Reads through the controller-runtime cache — the same
+// pod informer the drain path already relies on.
+func (r *FirmwarePolicyReconciler) flasherWaitingReason(ctx context.Context, job *batchv1.Job) string {
+	// An unlabeled Job isn't one of ours to match pods for; selecting on
+	// empty label values would be a selector we can't reason about.
+	if job.Labels[JobLabelCR] == "" || job.Labels[JobLabelNode] == "" {
+		return ""
+	}
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods,
+		client.InNamespace(job.Namespace),
+		client.MatchingLabels{
+			JobLabelCR:   job.Labels[JobLabelCR],
+			JobLabelNode: job.Labels[JobLabelNode],
+		},
+	); err != nil {
+		return ""
+	}
+	for i := range pods.Items {
+		for _, cs := range pods.Items[i].Status.ContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+				return cs.State.Waiting.Reason
+			}
+		}
+		// A pod that never got as far as a container status still
+		// reports image-pull trouble on its init/regular container
+		// statuses being empty — fall back to the pod-level phase
+		// message only when kubelet gave us nothing better.
+		for _, cs := range pods.Items[i].Status.InitContainerStatuses {
+			if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+				return cs.State.Waiting.Reason
+			}
+		}
+	}
+	return ""
 }
 
 // advanceNode dispatches per observed state. Each branch performs the
@@ -456,6 +616,7 @@ func (r *FirmwarePolicyReconciler) advanceNode(ctx context.Context, cr *firmware
 					// case, each of these is a fresh API rejection rather
 					// than a re-read of the same steady state.
 					metrics.FirmwareDrainBlockedTotal.WithLabelValues(cr.Name, metrics.ReasonPDB).Inc()
+					ns.Reason = ReasonEvictionBlocked
 					ns.Message = fmt.Sprintf("eviction of %s/%s blocked by PDB; will retry",
 						pods[i].Namespace, pods[i].Name)
 					log.FromContext(ctx).Info("eviction blocked by PDB",
@@ -531,6 +692,7 @@ func (r *FirmwarePolicyReconciler) spawnFlashJob(ctx context.Context, cr *firmwa
 			// Not a creation and not a failure — the Job is already there,
 			// so nothing to count.
 			ns.State = firmwarev1alpha1.NodeStateFlashing
+			ns.Reason = ReasonFlashing
 			ns.LastFlashJob = job.Name
 			return true, nil
 		}
@@ -549,6 +711,7 @@ func (r *FirmwarePolicyReconciler) spawnFlashJob(ctx context.Context, cr *firmwa
 	// the slot "open" and spawn another Job for a different Pending node
 	// despite a Job already existing here.
 	ns.State = firmwarev1alpha1.NodeStateFlashing
+	ns.Reason = ReasonFlashing
 	ns.LastFlashJob = job.Name
 
 	if err := r.annotateNode(ctx, node, map[string]string{

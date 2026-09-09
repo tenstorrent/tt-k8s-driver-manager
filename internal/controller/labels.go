@@ -127,6 +127,82 @@ const (
 	// has not yet been lifted.
 	ReasonUncordoning = "Uncordoning"
 
-	// ReasonPaused: spec.paused=true, controller is idle.
+	// ReasonPaused: spec.paused=true, controller is idle. Shared with
+	// the firmware controller, which has the same spec field.
 	ReasonPaused = "Paused"
+)
+
+// Firmware reason codes — the firmware-side counterpart to the driver
+// codes above, with the same contract: stable CamelCase identifiers
+// surfaced on cr.status.nodes[].reason (`kubectl describe ttfwp`) and as
+// the Reason of emitted k8s Events, so
+// `kubectl get events --field-selector reason=FlashJobFailed` works
+// fleet-wide.
+//
+// The firmware controller's state machine is Job-driven rather than
+// DaemonSet-driven, so the codes differ from the driver's even where the
+// states share names. ReasonCordoning / ReasonDraining / ReasonUncordoning
+// / ReasonPaused are shared with the driver block and not redeclared here.
+//
+// Only add codes the controller actually has a code path for.
+const (
+	// ReasonFlashing: the per-node flash Job exists and its pod is
+	// running — tt-flash is mid-write, or doing pre/post readback.
+	ReasonFlashing = "Flashing"
+
+	// ReasonFlasherImagePullFailed: the flash Job's pod can't pull the
+	// flasher image (private registry, missing imagePullSecrets,
+	// network). The node stays in Flashing rather than flipping to
+	// Failed: the Job's activeDeadlineSeconds is the authority on when
+	// a stuck flash is terminal, and a transient ErrImagePull that
+	// resolves itself shouldn't halt a whole rollout under the default
+	// haltOnFailure=true. The reason (and its Warning event) is what
+	// makes the stall visible in the meantime.
+	ReasonFlasherImagePullFailed = "FlasherImagePullFailed"
+
+	// ReasonFlashJobFailed: the flash Job reached a terminal failed
+	// condition — non-zero tt-flash exit, readback mismatch, or the
+	// activeDeadlineSeconds deadline. The Job's pod logs distinguish
+	// them; status keeps to one code because that's all the controller
+	// actually observes (a Failed Job condition).
+	ReasonFlashJobFailed = "FlashJobFailed"
+
+	// ReasonFlashSucceeded: flash Job completed successfully and the
+	// node needed no uncordon. Emitted once, on the transition to Done.
+	ReasonFlashSucceeded = "FlashSucceeded"
+
+	// ReasonEvictionBlocked: at least one device pod's eviction was
+	// refused by a PodDisruptionBudget on this pass. Not terminal — we
+	// retry every reconcile until the drain deadline turns it into
+	// ReasonDrainTimeout.
+	ReasonEvictionBlocked = "EvictionBlocked"
+
+	// ReasonDrainTimeout: the drain window expired with pods still
+	// holding /dev/tenstorrent. Terminal — we won't flash a chip
+	// that's still in use.
+	ReasonDrainTimeout = "DrainTimeout"
+
+	// ReasonNodeConflict: the node matches this CR's selector but is
+	// already owned by a different TenstorrentFirmwarePolicy. We report
+	// it and refuse to touch it.
+	ReasonNodeConflict = "NodeConflict"
+
+	// ReasonExternalCordon: node is cordoned, but not by us — likely a
+	// human maintenance window. We refuse to flash concurrently with
+	// whatever it was cordoned for.
+	ReasonExternalCordon = "ExternalCordon"
+
+	// ReasonRolloutHalted: another node in this CR is Failed and
+	// spec.upgradePolicy.haltOnFailure is true, so this node is parked
+	// even though it's otherwise ready to flash.
+	ReasonRolloutHalted = "RolloutHalted"
+
+	// ReasonAutoUpgradeDisabled: spec.upgradePolicy.autoUpgrade=false —
+	// the controller reports drift but never spawns a flash Job.
+	ReasonAutoUpgradeDisabled = "AutoUpgradeDisabled"
+
+	// ReasonTransientAPIError: an API-server read failed mid-observation.
+	// Deliberately not Failed — a blip shouldn't flip the top-level
+	// Ready condition or trip haltOnFailure.
+	ReasonTransientAPIError = "TransientAPIError"
 )
