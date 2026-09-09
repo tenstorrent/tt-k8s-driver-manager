@@ -8,19 +8,13 @@
 # OS requires bumping this too.
 ARG UBUNTU_VERSION=22.04
 ARG TT_SMI_VERSION=5.2.0
-# tt-kmd's udev rule (MODE=0666 + by-id symlinks) doesn't change between
-# kmd releases — the only thing it encodes is the Wormhole/Blackhole PCI
-# IDs. Pin to a recent tag; bump when new silicon family lands upstream.
-ARG TT_KMD_UDEV_VERSION=2.9.0
 FROM ubuntu:${UBUNTU_VERSION}
 ARG UBUNTU_VERSION
 ARG TT_SMI_VERSION
-ARG TT_KMD_UDEV_VERSION
 LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-k8s-driver-manager"
 LABEL org.opencontainers.image.description="tt-k8s-driver-manager builder pod — clones + builds tt-kmd, insmods, copies tt-smi to host."
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL com.tenstorrent.tt-smi-version="${TT_SMI_VERSION}"
-LABEL com.tenstorrent.tt-kmd-udev-version="${TT_KMD_UDEV_VERSION}"
 
 # build-essential: gcc + make for the OOT module build
 # gcc-12:          must match the host kernel's compiler. Ubuntu 22.04 LTS
@@ -49,15 +43,6 @@ RUN curl -fsSL -o /usr/local/bin/tt-smi \
         "https://github.com/tenstorrent/tt-smi/releases/download/v${TT_SMI_VERSION}/tt-smi-${TT_SMI_VERSION}-ubuntu-${UBUNTU_VERSION}" \
  && chmod 0755 /usr/local/bin/tt-smi
 ENV TT_SMI_VERSION=${TT_SMI_VERSION}
-
-# tt-kmd's udev rule. Bundled at image build (same pattern as tt-smi
-# above) so the entrypoint never needs to fetch or clone for it. Lands
-# on the host at /etc/udev/rules.d/50-tenstorrent.rules.
-RUN mkdir -p /usr/local/share/tt-k8s-driver-manager \
- && curl -fsSL -o /usr/local/share/tt-k8s-driver-manager/udev-50-tenstorrent.rules \
-        "https://raw.githubusercontent.com/tenstorrent/tt-kmd/ttkmd-${TT_KMD_UDEV_VERSION}/udev-50-tenstorrent.rules" \
- && chmod 0644 /usr/local/share/tt-k8s-driver-manager/udev-50-tenstorrent.rules
-ENV TT_KMD_UDEV_VERSION=${TT_KMD_UDEV_VERSION}
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
