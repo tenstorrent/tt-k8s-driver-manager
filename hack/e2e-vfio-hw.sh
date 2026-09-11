@@ -105,6 +105,21 @@ run_daemon() {
   DAEMON_PID=$!
 }
 
+# Signal the daemon binary directly (not the sudo wrapper — waiting on it
+# hung a run for 20 minutes) and poll for exit with a bound.
+stop_daemon() { # stop_daemon [signal]
+  sudo pkill "-${1:-TERM}" -x vfio-manage 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    pgrep -x vfio-manage >/dev/null || return 0
+    sleep 1
+  done
+  echo "daemon did not exit after ${1:-TERM}; killing"
+  cat "$WORKDIR/daemon.log"
+  sudo pkill -KILL -x vfio-manage 2>/dev/null || true
+  sleep 1
+  return 1
+}
+
 wait_driver() { # wait_driver <driver> <timeout_s>
   for _ in $(seq 1 "$2"); do
     [ "$(basename "$(readlink "$SYS/driver" 2>/dev/null)" )" = "$1" ] && return 0
@@ -136,7 +151,7 @@ sudo test -s "$STATE" || fail "state file not written"
 sudo grep -q "\"boardType\": \"${CARD_TYPE}\"" "$STATE" || { sudo cat "$STATE"; fail "state file lacks board type"; }
 echo "state file OK"
 
-sudo kill "$DAEMON_PID"; wait "$DAEMON_PID" 2>/dev/null || true
+stop_daemon || fail "phase-2 daemon hung on TERM"
 
 # --- Phase 3: restart recovers identity from state alone ---------------------
 
@@ -147,7 +162,7 @@ M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable 
 echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
   || { echo "$M" | grep tt_vfio_device_info || true; fail "identity not recovered from state file after restart"; }
 echo "identity recovered from state file"
-sudo kill "$DAEMON_PID"; wait "$DAEMON_PID" 2>/dev/null || true
+stop_daemon || fail "phase-3 daemon hung on TERM"
 
 # --- Phase 4: restore-on-exit hands the device back --------------------------
 
@@ -163,8 +178,7 @@ echo "device back on tt-kmd; running the restore-on-exit cycle:"
 
 run_daemon --restore-on-exit
 wait_driver vfio-pci 30 || { cat "$WORKDIR/daemon.log"; fail "bind failed in restore cycle"; }
-sudo kill -TERM "$DAEMON_PID"
-wait "$DAEMON_PID" 2>/dev/null || true
+stop_daemon TERM || fail "restore daemon hung on TERM"
 wait_driver tenstorrent 30 || { cat "$WORKDIR/daemon.log"; fail "restore-on-exit did not return the device to tt-kmd"; }
 OVERRIDE=$(cat "$SYS/driver_override" | tr -d '[:space:]')
 [ -z "$OVERRIDE" ] || [ "$OVERRIDE" = "(null)" ] || fail "driver_override still '$OVERRIDE' after restore"
