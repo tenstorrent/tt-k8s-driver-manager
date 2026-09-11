@@ -11,7 +11,7 @@ kind: TenstorrentDriverPolicy
 metadata:
   name: default
 spec:
-  version: "2.8.0"
+  version: "2.10.0"
   nodeAffinity: {}
 ```
 
@@ -66,7 +66,7 @@ kind: TenstorrentDriverPolicy
 metadata:
   name: fleet
 spec:
-  version: "2.8.0"
+  version: "2.10.0"
   nodeAffinity: {}
 ```
 
@@ -87,7 +87,7 @@ apiVersion: driver.tenstorrent.com/v1alpha1
 kind: TenstorrentDriverPolicy
 metadata: { name: canary }
 spec:
-  version: "2.8.0"
+  version: "2.10.0"
   nodeAffinity: { matchLabels: { tt.tenstorrent.com/pool: canary } }
 ```
 
@@ -112,7 +112,7 @@ kubectl patch ttdp default --type merge -p '{"spec":{"paused":false}}'
 
 ```yaml
 spec:
-  version: "2.8.0"
+  version: "2.10.0"
   installer:
     image: ghcr.io/tenstorrent/tt-k8s-driver-manager-builder:sha-abc1234
     imagePullPolicy: Always
@@ -123,7 +123,7 @@ spec:
 Bump `spec.version`:
 
 ```bash
-kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.8.0"}}'
+kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.10.0"}}'
 ```
 
 Per-node state machine (mirrors `ttfwp`):
@@ -168,7 +168,7 @@ A 3-node cluster upgrade takes ~1–2 min cache-cold, ~30s cache-warm
 ```bash
 $ kubectl get ttdp default -o jsonpath='{.status.nodes}' | jq
 [
-  {"name":"node-1","currentVersion":"2.8.0","state":"Done"},
+  {"name":"node-1","currentVersion":"2.10.0","state":"Done"},
   {"name":"node-2","currentVersion":"2.7.0","state":"Draining"},
   {"name":"node-3","currentVersion":"2.7.0","state":"Pending"}
 ]
@@ -208,7 +208,7 @@ Per node, after a successful reconcile:
 /var/cache/tt-kmd/
 └── 6.8.0-111-generic/
     ├── 2.7.0/tenstorrent.ko   ← cached build from a previous CR
-    └── 2.8.0/tenstorrent.ko   ← currently loaded
+    └── 2.10.0/tenstorrent.ko   ← currently loaded
 /usr/local/bin/tt-smi           ← self-contained binary (PyInstaller build,
                                   no host Python needed)
 ```
@@ -240,7 +240,7 @@ Workloads requiring a specific tt-kmd version can `nodeSelector` against
 
 ```yaml
 nodeSelector:
-  driver.tenstorrent.com/kmd-version: "2.8.0"
+  driver.tenstorrent.com/kmd-version: "2.10.0"
 ```
 
 This is honest: the label reflects what's loaded *right now*, not what

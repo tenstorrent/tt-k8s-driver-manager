@@ -8,7 +8,7 @@ for each.
 Bump `spec.version` on the `TenstorrentDriverPolicy`:
 
 ```bash
-kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.8.0"}}'
+kubectl patch ttdp default --type merge -p '{"spec":{"version":"2.10.0"}}'
 ```
 
 Per-node sequence (full state machine in [Upgrade flow](driver.md#upgrade-flow)):
