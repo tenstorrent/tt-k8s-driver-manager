@@ -36,6 +36,8 @@ type Binder struct {
 	cfg             *config.Config
 	restoreOnExit   bool
 	originalDrivers map[string]string // BDF → driver the device was on before we touched it
+	identities      map[string]Identity
+	statePath       string
 }
 
 // New creates a Binder from the given config. If restoreOnExit is true,
@@ -45,6 +47,7 @@ func New(cfg *config.Config, restoreOnExit bool) *Binder {
 		cfg:             cfg,
 		restoreOnExit:   restoreOnExit,
 		originalDrivers: make(map[string]string),
+		identities:      make(map[string]Identity),
 	}
 }
 
@@ -63,11 +66,17 @@ func (b *Binder) RunOnce() error {
 		boundPerResource[grp.ResourceName] = 0
 	}
 
+	seen := make(map[string]deviceIdentity)
+
 	for _, dev := range devices {
 		resourceName, ok := b.matchesConfigName(dev)
 		if !ok {
 			continue
 		}
+
+		// Identify while the device is (possibly) still on tt-kmd — the
+		// telemetry attributes disappear once it moves to vfio-pci.
+		seen[dev.BDF] = deviceIdentity{resource: resourceName, id: b.identify(dev)}
 
 		if dev.OriginalDriver == vfioPCIDriver {
 			boundPerResource[resourceName]++
@@ -93,6 +102,7 @@ func (b *Binder) RunOnce() error {
 	for resource, count := range boundPerResource {
 		metrics.DevicesBound.WithLabelValues(resource).Set(count)
 	}
+	publishIdentities(seen)
 
 	return nil
 }

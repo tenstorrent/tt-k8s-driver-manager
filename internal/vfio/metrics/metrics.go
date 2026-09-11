@@ -37,10 +37,19 @@ var (
 		Name:      "noiommu_mode",
 		Help:      "1 if vfio-pci is operating in unsafe-noiommu mode, 0 otherwise.",
 	})
+
+	// DeviceInfo is a constant-1 info series carrying each managed device's
+	// board identity (n150 vs n300 etc.), which is unreadable from PCI
+	// config space once the device is bound to vfio-pci.
+	DeviceInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "tt_vfio",
+		Name:      "device_info",
+		Help:      "Board identity of each vfio-managed device (value is always 1).",
+	}, []string{"bdf", "resource", "board_type", "serial"})
 )
 
 func init() {
-	prometheus.MustRegister(DevicesBound, BindErrors, NoiommuMode)
+	prometheus.MustRegister(DevicesBound, BindErrors, NoiommuMode, DeviceInfo)
 }
 
 // Serve starts the HTTP metrics server on the given address (e.g. ":9401").

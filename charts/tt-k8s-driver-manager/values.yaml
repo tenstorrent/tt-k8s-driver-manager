@@ -186,6 +186,13 @@ vfioManager:
   # -- Port for the Prometheus /metrics and /healthz endpoints (0 disables
   # both; the liveness probe is dropped with them).
   metricsPort: 9401
+  # -- Host directory for the device identity state file. n150 and n300
+  # share a PCI ID; the board type is only readable from tt-kmd's telemetry
+  # attributes, so the binder records it before binding and persists it here
+  # to survive pod restarts (after which the device is already on vfio-pci
+  # and unidentifiable). Empty disables persistence: identities are then
+  # re-learned only when a device is caught on tt-kmd again.
+  stateDir: /var/lib/tt-vfio
   # -- vfio-manage container resource requests/limits.
   resources: {}
   # -- Restrict the DaemonSet to nodes set aside for VM passthrough.

@@ -40,6 +40,9 @@ spec:
             {{- else }}
             - --metrics-addr=
             {{- end }}
+            {{- if .Values.vfioManager.stateDir }}
+            - --state-file={{ .Values.vfioManager.stateDir }}/identity.json
+            {{- end }}
             {{- range .Values.vfioManager.extraArgs }}
             - {{ . | quote }}
             {{- end }}
@@ -52,6 +55,9 @@ spec:
             - { name: dev-vfio, mountPath: /dev/vfio }
             - { name: lib-modules, mountPath: /lib/modules, readOnly: true }
             - { name: config, mountPath: /etc/tt-vfio, readOnly: true }
+            {{- if .Values.vfioManager.stateDir }}
+            - { name: state, mountPath: {{ .Values.vfioManager.stateDir }} }
+            {{- end }}
           {{- if gt (.Values.vfioManager.metricsPort | int) 0 }}
           ports:
             - { name: metrics, containerPort: {{ .Values.vfioManager.metricsPort }} }
@@ -70,6 +76,10 @@ spec:
         - name: config
           configMap:
             name: {{ include "tt-k8s-driver-manager.fullname" . }}-vfio
+        {{- if .Values.vfioManager.stateDir }}
+        - name: state
+          hostPath: { path: {{ .Values.vfioManager.stateDir }}, type: DirectoryOrCreate }
+        {{- end }}
       {{- with .Values.vfioManager.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
       {{- end }}
