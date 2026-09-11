@@ -85,14 +85,14 @@ func (b *Binder) identify(dev pciDevice) Identity {
 	}
 
 	base := filepath.Join(pciDevicesDir(), dev.BDF)
-	cardType, err := readTrimmed(filepath.Join(base, "tt_card_type"))
+	cardType, err := readTelemetryAttr(base, "tt_card_type")
 	if err != nil {
 		// Not on tt-kmd (or a tt-kmd too old to expose telemetry attrs);
 		// nothing to read. Don't cache: a later pass may catch the device
 		// on tt-kmd after a drift.
 		return Identity{BoardType: "unknown"}
 	}
-	serial, err := readTrimmed(filepath.Join(base, "tt_serial"))
+	serial, err := readTelemetryAttr(base, "tt_serial")
 	if err != nil {
 		serial = ""
 	}
@@ -116,6 +116,22 @@ func publishIdentities(seen map[string]deviceIdentity) {
 type deviceIdentity struct {
 	resource string
 	id       Identity
+}
+
+// readTelemetryAttr reads a tt-kmd telemetry attribute for a PCI device.
+//
+// tt-kmd attaches the telemetry attribute group to its class device
+// (named "tenstorrent/<N>", which sysfs renders as "tenstorrent!<N>"),
+// whose parent is the PCI device — so the attribute lives at
+// /sys/bus/pci/devices/<bdf>/tenstorrent!<N>/tt_card_type, not on the PCI
+// device node itself. The ordinal N is assigned in probe order, so glob
+// for it.
+func readTelemetryAttr(pciDevDir, attr string) (string, error) {
+	matches, err := filepath.Glob(filepath.Join(pciDevDir, "tenstorrent!*", attr))
+	if err != nil || len(matches) == 0 {
+		return "", fmt.Errorf("no tt-kmd telemetry attribute %s under %s", attr, pciDevDir)
+	}
+	return readTrimmed(matches[0])
 }
 
 func readTrimmed(path string) (string, error) {

@@ -38,13 +38,18 @@ log "identity readable on tt-kmd (BDF=$BDF device=$DEVICE_ID)"
 CUR_DRIVER=$(basename "$(readlink "$SYS/driver")")
 [ "$CUR_DRIVER" = "tenstorrent" ] || fail "device starts on '$CUR_DRIVER', expected tt-kmd"
 
-# tt_card_type may lag ARC init; poll briefly before concluding it's absent.
+# tt-kmd puts the telemetry attrs on its class device (a child dir named
+# tenstorrent!<N> under the PCI device), not on the PCI node itself. The
+# attrs may also lag ARC init; poll briefly before concluding they're absent.
 CARD_TYPE=""
 for _ in $(seq 1 12); do
-  CARD_TYPE=$(cat "$SYS/tt_card_type" 2>/dev/null | tr -d '[:space:]') && [ -n "$CARD_TYPE" ] && break
+  ATTR=$(ls -d "$SYS"/tenstorrent!*/tt_card_type 2>/dev/null | head -1)
+  if [ -n "$ATTR" ]; then
+    CARD_TYPE=$(tr -d '[:space:]' < "$ATTR") && [ -n "$CARD_TYPE" ] && break
+  fi
   sleep 5
 done
-SERIAL=$(cat "$SYS/tt_serial" 2>/dev/null | tr -d '[:space:]' || true)
+SERIAL=$(cat "$SYS"/tenstorrent!*/tt_serial 2>/dev/null | tr -d '[:space:]' || true)
 echo "tt_card_type=${CARD_TYPE:-<unreadable>} tt_serial=${SERIAL:-<unreadable>}"
 [ -n "$CARD_TYPE" ] || fail "tt_card_type unreadable while on tt-kmd — identity mechanism assumption broken (kmd $(cat /sys/module/tenstorrent/version 2>/dev/null))"
 

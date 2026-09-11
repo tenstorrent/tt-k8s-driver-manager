@@ -11,11 +11,14 @@ import (
 	"github.com/tenstorrent/tt-k8s-driver-manager/internal/vfio/metrics"
 )
 
-// addIdentity writes the tt-kmd telemetry attributes onto a fake device, as
-// they appear while the device is still bound to tt-kmd.
+// addIdentity writes the tt-kmd telemetry attributes onto a fake device.
+// They live on tt-kmd's class device ("tenstorrent/<N>" → "tenstorrent!<N>"
+// in sysfs), which is a child of the PCI device — matching real tt-kmd
+// (verified on an n150 hardware runner; the attrs are NOT on the PCI node).
 func (f *fakeSysfs) addIdentity(t *testing.T, bdf, cardType, serial string) {
 	t.Helper()
-	base := filepath.Join(f.root, "bus/pci/devices", bdf)
+	base := filepath.Join(f.root, "bus/pci/devices", bdf, "tenstorrent!0")
+	mkdir(t, base)
 	write(t, filepath.Join(base, "tt_card_type"), cardType+"\n")
 	write(t, filepath.Join(base, "tt_serial"), serial+"\n")
 }
@@ -102,11 +105,8 @@ func TestStateFile_RoundTrip(t *testing.T) {
 	// A fresh binder (pod restart) sees the device already on vfio-pci with
 	// no telemetry, but must recover the identity from the state file.
 	f.setDriver(t, "0000:01:00.0", "vfio-pci")
-	base := filepath.Join(f.root, "bus/pci/devices/0000:01:00.0")
-	for _, attr := range []string{"tt_card_type", "tt_serial"} {
-		if err := os.Remove(filepath.Join(base, attr)); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.RemoveAll(filepath.Join(f.root, "bus/pci/devices/0000:01:00.0/tenstorrent!0")); err != nil {
+		t.Fatal(err)
 	}
 
 	b2 := New(wormholeConfig(), false)
