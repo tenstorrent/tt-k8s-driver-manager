@@ -17,7 +17,7 @@ import (
 // (verified on an n150 hardware runner; the attrs are NOT on the PCI node).
 func (f *fakeSysfs) addIdentity(t *testing.T, bdf, cardType, serial string) {
 	t.Helper()
-	base := filepath.Join(f.root, "bus/pci/devices", bdf, "tenstorrent!0")
+	base := filepath.Join(f.root, "bus/pci/devices", bdf, "tenstorrent", "tenstorrent!0")
 	mkdir(t, base)
 	write(t, filepath.Join(base, "tt_card_type"), cardType+"\n")
 	write(t, filepath.Join(base, "tt_serial"), serial+"\n")
@@ -105,7 +105,7 @@ func TestStateFile_RoundTrip(t *testing.T) {
 	// A fresh binder (pod restart) sees the device already on vfio-pci with
 	// no telemetry, but must recover the identity from the state file.
 	f.setDriver(t, "0000:01:00.0", "vfio-pci")
-	if err := os.RemoveAll(filepath.Join(f.root, "bus/pci/devices/0000:01:00.0/tenstorrent!0")); err != nil {
+	if err := os.RemoveAll(filepath.Join(f.root, "bus/pci/devices/0000:01:00.0/tenstorrent")); err != nil {
 		t.Fatal(err)
 	}
 

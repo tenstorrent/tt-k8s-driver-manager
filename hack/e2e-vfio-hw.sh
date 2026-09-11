@@ -38,20 +38,19 @@ log "identity readable on tt-kmd (BDF=$BDF device=$DEVICE_ID)"
 CUR_DRIVER=$(basename "$(readlink "$SYS/driver")")
 [ "$CUR_DRIVER" = "tenstorrent" ] || fail "device starts on '$CUR_DRIVER', expected tt-kmd"
 
-# tt-kmd puts the telemetry attrs on its class device (a child dir named
-# tenstorrent!<N> under the PCI device), not on the PCI node itself. The
-# attrs may also lag ARC init; poll briefly before concluding they're absent.
+# tt-kmd puts the telemetry attrs on its class device under an intermediate
+# "tenstorrent" dir: <pci dev>/tenstorrent/tenstorrent!<N>/tt_card_type
+# (verified on the n150 runner, kmd 2.8.0). The attrs may lag ARC init;
+# poll briefly before concluding they're absent.
 CARD_TYPE=""
 for _ in $(seq 1 12); do
-  # `|| true`: ls exits 2 when no match yet, and a bare assignment under
-  # errexit+pipefail would kill the script before the retry loop retries.
-  ATTR=$(ls -d "$SYS"/tenstorrent!*/tt_card_type 2>/dev/null | head -1 || true)
+  ATTR=$(ls -d "$SYS"/tenstorrent/tenstorrent!*/tt_card_type 2>/dev/null | head -1 || true)
   if [ -n "$ATTR" ]; then
     CARD_TYPE=$(tr -d '[:space:]' < "$ATTR") && [ -n "$CARD_TYPE" ] && break
   fi
   sleep 5
 done
-SERIAL=$(cat "$SYS"/tenstorrent!*/tt_serial 2>/dev/null | tr -d '[:space:]' || true)
+SERIAL=$(cat "$SYS"/tenstorrent/tenstorrent!*/tt_serial 2>/dev/null | tr -d '[:space:]' || true)
 echo "tt_card_type=${CARD_TYPE:-<unreadable>} tt_serial=${SERIAL:-<unreadable>}"
 if [ -z "$CARD_TYPE" ]; then
   echo "== sysfs layout diagnostics =="

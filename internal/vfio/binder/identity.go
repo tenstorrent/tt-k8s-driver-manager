@@ -120,18 +120,26 @@ type deviceIdentity struct {
 
 // readTelemetryAttr reads a tt-kmd telemetry attribute for a PCI device.
 //
-// tt-kmd attaches the telemetry attribute group to its class device
-// (named "tenstorrent/<N>", which sysfs renders as "tenstorrent!<N>"),
-// whose parent is the PCI device — so the attribute lives at
-// /sys/bus/pci/devices/<bdf>/tenstorrent!<N>/tt_card_type, not on the PCI
-// device node itself. The ordinal N is assigned in probe order, so glob
-// for it.
+// tt-kmd attaches the telemetry attribute group to its class device, a
+// child of the PCI device. Verified on an n150 hardware runner (kmd 2.8.0),
+// the attribute path is:
+//
+//	/sys/bus/pci/devices/<bdf>/tenstorrent/tenstorrent!<N>/tt_card_type
+//
+// (an intermediate "tenstorrent" dir, then the class device named
+// "tenstorrent/<N>" which sysfs renders as "tenstorrent!<N>"). The ordinal
+// N is assigned in probe order, so glob for it. Both layouts are tried in
+// case the intermediate dir is version-dependent.
 func readTelemetryAttr(pciDevDir, attr string) (string, error) {
-	matches, err := filepath.Glob(filepath.Join(pciDevDir, "tenstorrent!*", attr))
-	if err != nil || len(matches) == 0 {
-		return "", fmt.Errorf("no tt-kmd telemetry attribute %s under %s", attr, pciDevDir)
+	for _, pattern := range []string{
+		filepath.Join(pciDevDir, "tenstorrent", "tenstorrent!*", attr),
+		filepath.Join(pciDevDir, "tenstorrent!*", attr),
+	} {
+		if matches, err := filepath.Glob(pattern); err == nil && len(matches) > 0 {
+			return readTrimmed(matches[0])
+		}
 	}
-	return readTrimmed(matches[0])
+	return "", fmt.Errorf("no tt-kmd telemetry attribute %s under %s", attr, pciDevDir)
 }
 
 func readTrimmed(path string) (string, error) {
