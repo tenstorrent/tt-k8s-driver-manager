@@ -32,7 +32,9 @@ type Identity struct {
 
 // boardTypeBySubsystem maps the PCI subsystem device ID to the board type.
 // The code space is the same one tt-kmd's tt_card_type decode uses (tt-kmd
-// telemetry.c) — confirmed on hardware for n150 (subsystem_device=0x0018).
+// telemetry.c). Hardware-confirmed via the e2e matrix: n150 = 0x0018,
+// n300 = 0x0014, p150b = 0x0041 (each cross-checked against tt_card_type on
+// the same device). The rest are inferred from tt-kmd's table.
 var boardTypeBySubsystem = map[uint16]string{
 	// Wormhole
 	0x0014: "n300",
