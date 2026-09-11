@@ -40,10 +40,12 @@ jobs:
       matrix:
         runner:
           - tt-ubuntu-2204-n150-stable
-          # Blackhole (vIOMMU) — exercises the non-noiommu path and a second
-          # board_type decode. Uncomment once the pool is confirmed available
-          # to this repo:
-          # - tt-ubuntu-2204-bh-loudbox-viommu-stable
+          # Second Wormhole SKU: confirms whether n300 reports subsystem
+          # 0x0014, the last piece needed to trust config-space-only identity.
+          - tt-ubuntu-2204-n300-stable
+          # Blackhole (PCI ID b140): confirms the p150 subsystem code and the
+          # telemetry path on BH silicon.
+          - tt-ubuntu-2204-p150b-stable
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.runner }}
     timeout-minutes: 20
