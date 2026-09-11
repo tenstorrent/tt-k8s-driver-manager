@@ -1,0 +1,80 @@
+{{- if .Values.vfioManager.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "tt-k8s-driver-manager.fullname" . }}-vfio
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tt-k8s-driver-manager.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "tt-k8s-driver-manager.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: vfio-manage
+  template:
+    metadata:
+      labels:
+        {{- include "tt-k8s-driver-manager.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: vfio-manage
+      annotations:
+        # Roll the pods when the device list changes; the binder reads the
+        # config once at startup.
+        checksum/config: {{ include (print $.Template.BasePath "/vfio-configmap.yaml") . | sha256sum }}
+    spec:
+      priorityClassName: system-node-critical
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: vfio-manage
+          image: "{{ .Values.vfioManager.image.repository }}:{{ .Values.vfioManager.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.vfioManager.image.pullPolicy }}
+          args:
+            - --config=/etc/tt-vfio/config.yaml
+            - --bind-interval={{ .Values.vfioManager.bindInterval }}
+            {{- if .Values.vfioManager.restoreOnExit }}
+            - --restore-on-exit
+            {{- end }}
+            {{- if gt (.Values.vfioManager.metricsPort | int) 0 }}
+            - --metrics-addr=:{{ .Values.vfioManager.metricsPort }}
+            {{- else }}
+            - --metrics-addr=
+            {{- end }}
+            {{- range .Values.vfioManager.extraArgs }}
+            - {{ . | quote }}
+            {{- end }}
+          securityContext:
+            # Writing to /sys/bus/pci and modprobe'ing vfio-pci both need it.
+            privileged: true
+          resources: {{- toYaml .Values.vfioManager.resources | nindent 12 }}
+          volumeMounts:
+            - { name: sys, mountPath: /sys }
+            - { name: dev-vfio, mountPath: /dev/vfio }
+            - { name: lib-modules, mountPath: /lib/modules, readOnly: true }
+            - { name: config, mountPath: /etc/tt-vfio, readOnly: true }
+          {{- if gt (.Values.vfioManager.metricsPort | int) 0 }}
+          ports:
+            - { name: metrics, containerPort: {{ .Values.vfioManager.metricsPort }} }
+          livenessProbe:
+            httpGet: { path: /healthz, port: metrics }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          {{- end }}
+      volumes:
+        - name: sys
+          hostPath: { path: /sys }
+        - name: dev-vfio
+          hostPath: { path: /dev/vfio }
+        - name: lib-modules
+          hostPath: { path: /lib/modules, type: Directory }
+        - name: config
+          configMap:
+            name: {{ include "tt-k8s-driver-manager.fullname" . }}-vfio
+      {{- with .Values.vfioManager.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.vfioManager.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations: {{- toYaml .Values.vfioManager.tolerations | nindent 8 }}
+{{- end }}

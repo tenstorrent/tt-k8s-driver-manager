@@ -20,7 +20,7 @@ kubectl get events --field-selector involvedObject.name=<ttdp>
 ```
 Status:
   Nodes:
-    Name:    e01cs01
+    Name:    node-01
     State:   HostManaged
     Reason:  HostManagedKMD
     Message: DKMS / host-managed kmd detected; operator standing down ...

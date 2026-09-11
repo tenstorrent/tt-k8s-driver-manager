@@ -1,0 +1,20 @@
+{{- if .Values.vfioManager.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tt-k8s-driver-manager.fullname" . }}-vfio
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "tt-k8s-driver-manager.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    devices:
+    {{- range .Values.vfioManager.devices }}
+      - resourceName: {{ .resourceName | quote }}
+        vendorId: {{ .vendorId | quote }}
+        deviceId:
+        {{- range .deviceId }}
+          - {{ . | quote }}
+        {{- end }}
+        locality: {{ .locality | default "individual" | quote }}
+    {{- end }}
+{{- end }}
