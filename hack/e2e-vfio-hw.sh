@@ -77,7 +77,10 @@ echo "::notice title=SKU identity::board_type=$CARD_TYPE subsystem_device=$(cat 
 log "IOMMU / vfio setup"
 if [ -z "$(ls -A /sys/kernel/iommu_groups 2>/dev/null)" ]; then
   echo "no IOMMU groups — enabling unsafe noiommu mode (test VM)"
-  sudo modprobe vfio enable_unsafe_noiommu_mode=1
+  # modprobe params are a no-op if vfio is already loaded; set it via sysfs.
+  sudo modprobe vfio || true
+  echo Y | sudo tee /sys/module/vfio/parameters/enable_unsafe_noiommu_mode >/dev/null
+  cat /sys/module/vfio/parameters/enable_unsafe_noiommu_mode
 fi
 sudo modprobe vfio-pci || true
 
