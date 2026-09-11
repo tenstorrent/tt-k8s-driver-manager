@@ -9,7 +9,7 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="has(self.nodeAffinity) != has(self.nodeSelector)",message="exactly one of spec.nodeAffinity or spec.nodeSelector must be set"
 type TenstorrentFirmwarePolicySpec struct {
-	// Version is the firmware bundle version, e.g. "19.8.0".
+	// Version is the firmware bundle version, e.g. "19.12.0".
 	// Used to derive the bundle filename (fw_pack-<version>.fwbundle) and
 	// the default readback expectation (<version>.0).
 	// +kubebuilder:validation:Required

@@ -12,7 +12,7 @@ kind: TenstorrentFirmwarePolicy
 metadata:
   name: default
 spec:
-  version: "19.8.0"
+  version: "19.12.0"
   nodeAffinity: {}
 ```
 
@@ -63,7 +63,7 @@ apiVersion: firmware.tenstorrent.com/v1alpha1
 kind: TenstorrentFirmwarePolicy
 metadata: { name: fleet }
 spec:
-  version: "19.8.0"
+  version: "19.12.0"
   nodeAffinity: {}
   upgradePolicy:
     maxParallel: 1     # one node at a time — bad fw shouldn't lose the cluster
@@ -76,7 +76,7 @@ spec:
 
 ```yaml
 spec:
-  version: "19.8.0"
+  version: "19.12.0"
   flasher:
     forceWrite: true
 ```
@@ -88,9 +88,9 @@ spec:
 
 ```yaml
 spec:
-  version: "19.7.0"
+  version: "19.11.0"
   flasher:
-    forceWrite: true     # 19.8.0 → 19.7.0 needs --force
+    forceWrite: true     # 19.12.0 → 19.11.0 needs --force
   upgradePolicy:
     maxParallel: 1       # downgrade is the riskiest direction; serial
 ```
@@ -99,9 +99,9 @@ spec:
 
 ```yaml
 spec:
-  version: "19.8.0"
-  bundleURL: "https://internal.example.com/fw/fw_pack-19.8.0.fwbundle"
-  readbackVersion: "19.8.0.0"   # explicit; helps when bundle metadata is odd
+  version: "19.12.0"
+  bundleURL: "https://internal.example.com/fw/fw_pack-19.12.0.fwbundle"
+  readbackVersion: "19.12.0.0"   # explicit; helps when bundle metadata is odd
 ```
 
 ## Drain semantics
@@ -147,7 +147,7 @@ Same pattern as the driver: patch `spec.version`. Per-node Jobs roll
 through with whatever parallelism + drain config is set:
 
 ```bash
-kubectl patch ttfwp default --type merge -p '{"spec":{"version":"19.9.0"}}'
+kubectl patch ttfwp default --type merge -p '{"spec":{"version":"19.12.0"}}'
 ```
 
 The controller is **idempotent at the Job level**: a Job for
@@ -160,17 +160,17 @@ Complete Job is reused as evidence that this node is done.
 ```bash
 $ kubectl get ttfwp default
 NAME      VERSION   MATCHED   UPTODATE   INPROGRESS   FAILED   AGE
-default   19.9.0    3         2          1            0        3m
+default   19.12.0   3         2          1            0        3m
 
 $ kubectl get ttfwp default -o jsonpath='{.status.nodes}' | jq
 [
-  {"name":"node-1","currentVersion":"19.9.0.0","state":"Done",
+  {"name":"node-1","currentVersion":"19.12.0.0","state":"Done",
    "reason":"FlashSucceeded"},
-  {"name":"node-2","currentVersion":"19.9.0.0","state":"Done",
+  {"name":"node-2","currentVersion":"19.12.0.0","state":"Done",
    "reason":"FlashSucceeded"},
   {"name":"node-3","currentVersion":"19.8.0.0","state":"Flashing",
    "reason":"Flashing",
-   "lastFlashJob":"ttfwp-default-node-3-19-9-0-abc1234"}
+   "lastFlashJob":"ttfwp-default-node-3-19-12-0-abc1234"}
 ]
 ```
 
@@ -201,11 +201,11 @@ The full code table is in
 ```bash
 $ kubectl -n tt-operator-system get jobs -l firmware.tenstorrent.com/cr=default
 NAME                                       STATUS    COMPLETIONS   DURATION
-ttfwp-default-node-1-19-9-0-abc1234       Complete  1/1           34s
-ttfwp-default-node-2-19-9-0-abc1234       Complete  1/1           36s
-ttfwp-default-node-3-19-9-0-abc1234       Running   0/1           18s
+ttfwp-default-node-1-19-12-0-abc1234       Complete  1/1           34s
+ttfwp-default-node-2-19-12-0-abc1234       Complete  1/1           36s
+ttfwp-default-node-3-19-12-0-abc1234       Running   0/1           18s
 
-$ kubectl -n tt-operator-system logs job/ttfwp-default-node-3-19-9-0-abc1234
+$ kubectl -n tt-operator-system logs job/ttfwp-default-node-3-19-12-0-abc1234
 [flasher] pre-flash: tt-smi -s
 [flasher] pre-flash versions: 19.8.0.0 19.8.0.0 19.8.0.0 ...
 [flasher] flash: tt-flash --no-color flash --fw-tar /work/bundle.fwbundle
