@@ -43,7 +43,9 @@ CUR_DRIVER=$(basename "$(readlink "$SYS/driver")")
 # attrs may also lag ARC init; poll briefly before concluding they're absent.
 CARD_TYPE=""
 for _ in $(seq 1 12); do
-  ATTR=$(ls -d "$SYS"/tenstorrent!*/tt_card_type 2>/dev/null | head -1)
+  # `|| true`: ls exits 2 when no match yet, and a bare assignment under
+  # errexit+pipefail would kill the script before the retry loop retries.
+  ATTR=$(ls -d "$SYS"/tenstorrent!*/tt_card_type 2>/dev/null | head -1 || true)
   if [ -n "$ATTR" ]; then
     CARD_TYPE=$(tr -d '[:space:]' < "$ATTR") && [ -n "$CARD_TYPE" ] && break
   fi
