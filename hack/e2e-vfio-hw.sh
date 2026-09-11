@@ -113,7 +113,9 @@ wait_driver() { # wait_driver <driver> <timeout_s>
   return 1
 }
 
-metrics() { curl -sf "http://localhost:${METRICS_PORT}/metrics"; }
+# The TT runners route through an HTTP proxy; make sure localhost calls
+# never do (curl exit 22 = the proxy answering with an HTTP error).
+metrics() { curl -sf --noproxy '*' "http://localhost:${METRICS_PORT}/metrics"; }
 
 # --- Phase 2: bind + identity + metrics -------------------------------------
 
@@ -123,7 +125,7 @@ wait_driver vfio-pci 30 || { cat "$WORKDIR/daemon.log"; fail "device never bound
 echo "device on vfio-pci"
 
 sleep 2
-M=$(metrics)
+M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
 echo "$M" | grep 'tt_vfio_devices_bound_total{resource="tenstorrent.com/e2e-test"} 1' \
   || { echo "$M" | grep tt_vfio || true; fail "devices_bound metric wrong"; }
 echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
@@ -141,7 +143,7 @@ sudo kill "$DAEMON_PID"; wait "$DAEMON_PID" 2>/dev/null || true
 log "phase 3: restart — device already on vfio-pci, identity must come from the state file"
 run_daemon
 sleep 8
-M=$(metrics)
+M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
 echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
   || { echo "$M" | grep tt_vfio_device_info || true; fail "identity not recovered from state file after restart"; }
 echo "identity recovered from state file"
