@@ -10,6 +10,7 @@ package metrics
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -52,8 +53,17 @@ func Serve(addr string) {
 		w.Write([]byte("ok")) //nolint:errcheck
 	})
 
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	log.Printf("metrics: listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Printf("metrics: server exited: %v", err)
 	}
 }
