@@ -68,8 +68,13 @@ if [ -z "$CARD_TYPE" ]; then
   fail "tt_card_type unreadable while on tt-kmd — identity mechanism assumption broken"
 fi
 
-# The open question from the PR: does config space already distinguish SKUs?
-log "config-space identity (subsystem IDs) — decides if telemetry caching is even needed"
+# The daemon labels boards with UMD's product name (board_upi_map), which on
+# Blackhole is coarser than tt-kmd's tt_card_type (p150b -> p150): the
+# product is the card type with any single-letter revision suffix removed.
+PRODUCT=$(echo "$CARD_TYPE" | sed -E 's/^([np][0-9]+)[a-z]$/\1/')
+echo "expected product label: $PRODUCT"
+
+log "config-space identity (subsystem IDs)"
 echo "subsystem_vendor=$(cat "$SYS/subsystem_vendor") subsystem_device=$(cat "$SYS/subsystem_device") board_type=$CARD_TYPE"
 echo "::notice title=SKU identity::board_type=$CARD_TYPE subsystem_device=$(cat "$SYS/subsystem_device") (compare across runner SKUs)"
 
@@ -142,9 +147,9 @@ sleep 2
 M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
 echo "$M" | grep 'tt_vfio_devices_bound_total{resource="tenstorrent.com/e2e-test"} 1' \
   || { echo "$M" | grep tt_vfio || true; fail "devices_bound metric wrong"; }
-echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
-  || { echo "$M" | grep tt_vfio_device_info || true; fail "device_info missing board_type=${CARD_TYPE}"; }
-echo "metrics OK: bound=1, board_type=${CARD_TYPE}"
+echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${PRODUCT}\"" \
+  || { echo "$M" | grep tt_vfio_device_info || true; fail "device_info missing board_type=${PRODUCT}"; }
+echo "metrics OK: bound=1, board_type=${PRODUCT}"
 
 stop_daemon || fail "phase-2 daemon hung on TERM"
 
@@ -156,9 +161,9 @@ sleep 8
 M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
 # No state is persisted anywhere and telemetry is unreadable on vfio-pci, so
 # the board type must come purely from config space (subsystem_device).
-echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
+echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${PRODUCT}\"" \
   || { echo "$M" | grep tt_vfio_device_info || true; cat "$WORKDIR/daemon.log"; fail "subsystem-ID identity failed after restart"; }
-echo "restart OK: board_type=${CARD_TYPE} via subsystem ID, no persisted state"
+echo "restart OK: board_type=${PRODUCT} via subsystem ID, no persisted state"
 stop_daemon || fail "phase-3 daemon hung on TERM"
 
 # --- Phase 4: restore-on-exit hands the device back --------------------------
