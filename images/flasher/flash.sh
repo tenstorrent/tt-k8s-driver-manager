@@ -3,8 +3,8 @@
 #
 # Contract — set by the operator's Job template (see internal/controller/job.go):
 #   TT_FW_BUNDLE_PATH                  Local path the initContainer wrote the bundle to.
-#   TT_FW_VERSION                      Version we asked tt-flash to write (e.g. 19.8.0).
-#   TT_FW_READBACK                     Version tt-smi should report after flash (e.g. 19.8.0.0).
+#   TT_FW_VERSION                      Version we asked tt-flash to write (e.g. 19.12.0).
+#   TT_FW_READBACK                     Version tt-smi should report after flash (e.g. 19.12.0.0).
 #   TT_FLASH_ARGS                      Extra args to tt-flash (e.g. "--force"). Carries the
 #                                      tt-flash --force flag when ForceWrite is set on the CR.
 #   TT_FORCE_WRITE                     "true" → bypass the "current readback already matches

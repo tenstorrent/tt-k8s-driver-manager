@@ -10,7 +10,7 @@
 # build linked against that Ubuntu release's glibc; the version here just
 # has to be glibc-compatible with the container, not with the host.
 ARG UBUNTU_VERSION=22.04
-ARG TT_FLASH_VERSION=3.6.5
+ARG TT_FLASH_VERSION=3.8.0
 ARG TT_SMI_VERSION=5.2.0
 FROM ubuntu:${UBUNTU_VERSION}
 ARG UBUNTU_VERSION
