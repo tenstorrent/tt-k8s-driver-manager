@@ -1,0 +1,87 @@
+name: integration-vfio-hw
+
+# End-to-end vfio-manage test on Tenstorrent hardware runners — the same
+# ephemeral KVM runner pools tt-operator's integration-rke2 uses (card passed
+# through, tt-kmd preloaded, VM destroyed at job end, so stealing the device
+# onto vfio-pci cannot strand anything durable).
+#
+# Runs the binary directly on the runner rather than standing up a cluster:
+# the DaemonSet packaging is covered by helm lint/template in ci.yaml, and
+# what only hardware can answer is the sysfs/vfio behaviour itself:
+#   - tt_card_type / tt_serial are readable on tt-kmd before the bind
+#     (the identity mechanism's core assumption)
+#   - whether subsystem IDs differ per SKU (logged as a ::notice; if they do,
+#     telemetry-based identity can be replaced by config-space reads)
+#   - bind to vfio-pci works, metrics report the true board_type
+#   - a restart recovers identity from the state file alone
+#   - restore-on-exit hands the device back to tt-kmd with the override
+#     cleared (the driver_override newline fix, live)
+
+on:
+  pull_request:
+    paths:
+      - "cmd/vfio-manage/**"
+      - "internal/vfio/**"
+      - "hack/e2e-vfio-hw.sh"
+      - ".github/workflows/integration-vfio-hw.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-vfio-hw-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - tt-ubuntu-2204-n150-stable
+          # Blackhole (vIOMMU) — exercises the non-noiommu path and a second
+          # board_type decode. Uncomment once the pool is confirmed available
+          # to this repo:
+          # - tt-ubuntu-2204-bh-loudbox-viommu-stable
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.3"
+          cache: true
+
+      - name: Pre-flight — device + driver present
+        run: |
+          set -eux
+          uname -a
+          ls -l /dev/tenstorrent/
+          cat /sys/module/tenstorrent/version
+          lspci -nn -d 1e52:
+
+      - name: Build vfio-manage
+        run: go build -o bin/vfio-manage ./cmd/vfio-manage
+
+      - name: Run hardware e2e
+        run: ./hack/e2e-vfio-hw.sh
+        env:
+          VFIO_MANAGE_BIN: ./bin/vfio-manage
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          set +e
+          echo "== driver state =="
+          for d in /sys/bus/pci/devices/*; do
+            v=$(cat "$d/vendor" 2>/dev/null)
+            [ "$v" = "0x1e52" ] || continue
+            echo "$d driver=$(readlink "$d/driver") override='$(cat "$d/driver_override")'"
+          done
+          echo "== kernel log tail =="
+          sudo dmesg | tail -50
+          echo "== loaded modules =="
+          lsmod | grep -E 'vfio|tenstorrent'
