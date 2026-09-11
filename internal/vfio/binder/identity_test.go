@@ -28,6 +28,83 @@ func deviceInfoValue(t *testing.T, bdf, resource, boardType, serial string) floa
 	return testutil.ToFloat64(metrics.DeviceInfo.WithLabelValues(bdf, resource, boardType, serial))
 }
 
+// setSubsystem writes the PCI subsystem IDs, present regardless of driver.
+func (f *fakeSysfs) setSubsystem(t *testing.T, bdf, subsysDevice string) {
+	t.Helper()
+	base := filepath.Join(f.root, "bus/pci/devices", bdf)
+	write(t, filepath.Join(base, "subsystem_vendor"), "0x1e52\n")
+	write(t, filepath.Join(base, "subsystem_device"), "0x"+subsysDevice+"\n")
+}
+
+// A device already on vfio-pci with no telemetry and no state file is still
+// identified from its PCI subsystem ID (config space survives the driver
+// change) — verified on hardware: n150 reports subsystem_device 0x0018.
+func TestIdentify_SubsystemIDWhenAlreadyOnVFIO(t *testing.T) {
+	f := newFakeSysfs(t)
+	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "vfio-pci")
+	f.setSubsystem(t, "0000:01:00.0", "0014")
+
+	b := New(wormholeConfig(), false)
+	if err := b.RunOnce(); err != nil {
+		t.Fatal(err)
+	}
+
+	if id := b.identities["0000:01:00.0"]; id.BoardType != "n300" {
+		t.Errorf("identities = %+v; want n300 via subsystem ID 0x0014", b.identities)
+	}
+	if got := deviceInfoValue(t, "0000:01:00.0", "tenstorrent.com/wormhole", "n300", ""); got != 1 {
+		t.Errorf("tt_vfio_device_info{board_type=n300} = %v; want 1", got)
+	}
+}
+
+// Telemetry outranks the subsystem table when the device is on tt-kmd: it
+// carries the serial, which config space cannot provide. A subsystem-only
+// entry is upgraded when telemetry becomes readable.
+func TestIdentify_TelemetryUpgradesSubsystemEntry(t *testing.T) {
+	f := newFakeSysfs(t)
+	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "vfio-pci")
+	f.setSubsystem(t, "0000:01:00.0", "0018")
+
+	b := New(wormholeConfig(), false)
+	if err := b.RunOnce(); err != nil {
+		t.Fatal(err)
+	}
+	if id := b.identities["0000:01:00.0"]; id.BoardType != "n150" || id.Serial != "" {
+		t.Fatalf("first pass identities = %+v; want serial-less n150", b.identities)
+	}
+
+	// Device drifts to tt-kmd; telemetry now readable.
+	f.setDriver(t, "0000:01:00.0", "tenstorrent")
+	f.addDriver(t, "tenstorrent")
+	f.addIdentity(t, "0000:01:00.0", "n150", "0100181170800042")
+	if err := b.RunOnce(); err != nil {
+		t.Fatal(err)
+	}
+
+	if id := b.identities["0000:01:00.0"]; id.Serial != "0100181170800042" {
+		t.Errorf("identities after telemetry = %+v; want the serial filled in", b.identities)
+	}
+}
+
+// An unrecognised subsystem ID must not mislabel the board.
+func TestIdentify_UnknownSubsystemIDStaysUnknown(t *testing.T) {
+	f := newFakeSysfs(t)
+	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "vfio-pci")
+	f.setSubsystem(t, "0000:01:00.0", "9999")
+
+	b := New(wormholeConfig(), false)
+	if err := b.RunOnce(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, cached := b.identities["0000:01:00.0"]; cached {
+		t.Errorf("identities = %+v; an unmapped subsystem ID must not be cached", b.identities)
+	}
+	if got := deviceInfoValue(t, "0000:01:00.0", "tenstorrent.com/wormhole", "unknown", ""); got != 1 {
+		t.Errorf("tt_vfio_device_info{board_type=unknown} = %v; want 1", got)
+	}
+}
+
 func TestIdentify_ReadsCardTypeBeforeBind(t *testing.T) {
 	f := newFakeSysfs(t)
 	f.addDevice(t, "0000:01:00.0", "1e52", "401e", "tenstorrent")

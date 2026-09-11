@@ -164,6 +164,20 @@ echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
 echo "identity recovered from state file"
 stop_daemon || fail "phase-3 daemon hung on TERM"
 
+# --- Phase 3b: no state file either — subsystem-ID fallback ------------------
+
+log "phase 3b: fresh daemon, no state file, device on vfio-pci — subsystem ID must identify it"
+sudo rm -f "$STATE"
+run_daemon
+sleep 8
+M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
+# Serial is telemetry-only, so this entry is serial-less — but the board type
+# must come from config space (subsystem_device), not read "unknown".
+echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
+  || { echo "$M" | grep tt_vfio_device_info || true; cat "$WORKDIR/daemon.log"; fail "subsystem-ID fallback did not identify the board"; }
+echo "subsystem-ID fallback OK: board_type=${CARD_TYPE} with no state file and no telemetry"
+stop_daemon || fail "phase-3b daemon hung on TERM"
+
 # --- Phase 4: restore-on-exit hands the device back --------------------------
 
 log "phase 4: restore-on-exit returns the device to tt-kmd"

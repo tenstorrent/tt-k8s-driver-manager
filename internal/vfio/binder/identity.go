@@ -6,22 +6,48 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/tenstorrent/tt-k8s-driver-manager/internal/vfio/metrics"
 )
 
-// Identity is what tt-kmd knew about a device before we took it away.
+// Identity is a device's board identity.
 //
-// n150 and n300 share PCI ID 1e52:401e — the board type lives in ARC
-// telemetry, which only tt-kmd can read (it exposes it as the tt_card_type
-// and tt_serial sysfs attributes on the PCI device). Once the device is on
-// vfio-pci those attributes are gone, so the binder reads them in the window
-// where the device is still on tt-kmd and persists them to a state file that
-// outlives pod restarts.
+// n150 and n300 share PCI ID 1e52:401e, so the SKU needs more than the
+// device ID. Two sources, in order:
+//
+//  1. The PCI subsystem device ID. Verified on n150 hardware: it carries the
+//     same board-type code tt-kmd decodes from telemetry (0x0018 = n150), and
+//     config space stays readable no matter which driver is bound — including
+//     vfio-pci. This is how NVIDIA-style config-space identification works.
+//  2. tt-kmd's telemetry sysfs attributes (tt_card_type/tt_serial), readable
+//     only while the device is on tt-kmd. Used as a fallback for boards whose
+//     subsystem ID is not in the table, and as the only source for the serial
+//     number; results persist to a state file that outlives pod restarts.
 type Identity struct {
 	BoardType string `json:"boardType"`
 	Serial    string `json:"serial"`
+}
+
+// boardTypeBySubsystem maps the PCI subsystem device ID to the board type.
+// The code space is the same one tt-kmd's tt_card_type decode uses (tt-kmd
+// telemetry.c) — confirmed on hardware for n150 (subsystem_device=0x0018).
+var boardTypeBySubsystem = map[uint16]string{
+	// Wormhole
+	0x0014: "n300",
+	0x0018: "n150",
+	0x0035: "galaxy-wormhole",
+	// Blackhole
+	0x0036: "p100",
+	0x0040: "p150a",
+	0x0041: "p150b",
+	0x0042: "p150c",
+	0x0043: "p100a",
+	0x0044: "p300b",
+	0x0045: "p300a",
+	0x0046: "p300c",
+	0x0047: "galaxy-blackhole",
 }
 
 // identityState is the on-disk format of the state file.
@@ -74,34 +100,66 @@ func (b *Binder) saveState() {
 	}
 }
 
-// identify records the device's board identity if it isn't known yet and the
-// tt-kmd telemetry attributes are still readable. Returns the identity, with
-// BoardType "unknown" when the device was never seen on tt-kmd (e.g. it was
-// already on vfio-pci when this daemon first started and no state file entry
-// exists).
+// identify determines the device's board identity.
+//
+// Order: cached (memory/state file) → PCI subsystem ID (works regardless of
+// bound driver) → tt-kmd telemetry (only while on tt-kmd). The serial number
+// only exists in telemetry, so a subsystem-identified device still upgrades
+// its entry when telemetry becomes readable. BoardType is "unknown" only
+// when every source fails.
 func (b *Binder) identify(dev pciDevice) Identity {
-	if id, ok := b.identities[dev.BDF]; ok {
-		return id
+	cached, haveCached := b.identities[dev.BDF]
+	if haveCached && cached.Serial != "" {
+		return cached
 	}
 
 	base := filepath.Join(pciDevicesDir(), dev.BDF)
-	cardType, err := readTelemetryAttr(base, "tt_card_type")
-	if err != nil {
-		// Not on tt-kmd (or a tt-kmd too old to expose telemetry attrs);
-		// nothing to read. Don't cache: a later pass may catch the device
-		// on tt-kmd after a drift.
-		return Identity{BoardType: "unknown"}
-	}
-	serial, err := readTelemetryAttr(base, "tt_serial")
-	if err != nil {
-		serial = ""
+
+	// Telemetry is the richest source (board type + serial); take it
+	// whenever the device happens to be on tt-kmd.
+	if cardType, err := readTelemetryAttr(base, "tt_card_type"); err == nil {
+		serial, err := readTelemetryAttr(base, "tt_serial")
+		if err != nil {
+			serial = ""
+		}
+		id := Identity{BoardType: cardType, Serial: serial}
+		b.identities[dev.BDF] = id
+		log.Printf("identity: %s is a %s (serial %s, via telemetry)", dev.BDF, id.BoardType, id.Serial)
+		b.saveState()
+		return id
 	}
 
-	id := Identity{BoardType: cardType, Serial: serial}
-	b.identities[dev.BDF] = id
-	log.Printf("identity: %s is a %s (serial %s)", dev.BDF, id.BoardType, id.Serial)
-	b.saveState()
-	return id
+	if haveCached {
+		return cached
+	}
+
+	// Config space: readable even on vfio-pci.
+	if boardType, ok := boardTypeFromSubsystem(base); ok {
+		id := Identity{BoardType: boardType}
+		b.identities[dev.BDF] = id
+		log.Printf("identity: %s is a %s (via subsystem ID)", dev.BDF, id.BoardType)
+		b.saveState()
+		return id
+	}
+
+	// Nothing worked. Don't cache: a later pass may catch the device on
+	// tt-kmd after a drift, or the subsystem ID may join the table.
+	return Identity{BoardType: "unknown"}
+}
+
+// boardTypeFromSubsystem identifies the board from the PCI subsystem device
+// ID, which sysfs exposes for every PCI device regardless of driver.
+func boardTypeFromSubsystem(pciDevDir string) (string, bool) {
+	raw, err := readTrimmed(filepath.Join(pciDevDir, "subsystem_device"))
+	if err != nil {
+		return "", false
+	}
+	v, err := strconv.ParseUint(strings.TrimPrefix(raw, "0x"), 16, 16)
+	if err != nil {
+		return "", false
+	}
+	boardType, ok := boardTypeBySubsystem[uint16(v)]
+	return boardType, ok
 }
 
 // publishIdentities re-exports the tt_vfio_device_info series for the
