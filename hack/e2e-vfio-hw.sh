@@ -7,11 +7,12 @@
 #   1. Discover the TT device and dump its identity while on tt-kmd —
 #      including subsystem IDs, to answer whether n150/n300 differ in config
 #      space (if they do, telemetry-based identity is unnecessary).
-#   2. Run vfio-manage: assert the device lands on vfio-pci, the metrics
+#   2. Run vfio-manage: assert the device lands on vfio-pci and the metrics
 #      endpoint reports devices_bound and device_info with the real
-#      board_type, and the state file holds the identity.
-#   3. Restart vfio-manage: assert the identity is recovered from the state
-#      file alone (the device is on vfio-pci now, telemetry unreadable).
+#      board_type.
+#   3. Restart vfio-manage: with the device on vfio-pci (telemetry
+#      unreadable) and no persisted state, the board type must come from
+#      the PCI subsystem ID alone.
 #   4. SIGTERM with --restore-on-exit: assert the device returns to tt-kmd
 #      and driver_override is cleared.
 set -euo pipefail
@@ -94,12 +95,10 @@ devices:
     deviceId: ["${DEVICE_ID}"]
 EOF
 
-STATE="$WORKDIR/identity.json"
 run_daemon() {
   sudo "$VFIO_MANAGE_BIN" \
     --config "$WORKDIR/config.yaml" \
     --bind-interval 5s \
-    --state-file "$STATE" \
     --metrics-addr ":${METRICS_PORT}" \
     "$@" >"$WORKDIR/daemon.log" 2>&1 &
   DAEMON_PID=$!
@@ -147,36 +146,20 @@ echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
   || { echo "$M" | grep tt_vfio_device_info || true; fail "device_info missing board_type=${CARD_TYPE}"; }
 echo "metrics OK: bound=1, board_type=${CARD_TYPE}"
 
-sudo test -s "$STATE" || fail "state file not written"
-sudo grep -q "\"boardType\": \"${CARD_TYPE}\"" "$STATE" || { sudo cat "$STATE"; fail "state file lacks board type"; }
-echo "state file OK"
-
 stop_daemon || fail "phase-2 daemon hung on TERM"
 
-# --- Phase 3: restart recovers identity from state alone ---------------------
+# --- Phase 3: restart — board type from config space alone --------------------
 
-log "phase 3: restart — device already on vfio-pci, identity must come from the state file"
+log "phase 3: fresh daemon, device already on vfio-pci — subsystem ID must identify it"
 run_daemon
 sleep 8
 M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
+# No state is persisted anywhere and telemetry is unreadable on vfio-pci, so
+# the board type must come purely from config space (subsystem_device).
 echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
-  || { echo "$M" | grep tt_vfio_device_info || true; fail "identity not recovered from state file after restart"; }
-echo "identity recovered from state file"
+  || { echo "$M" | grep tt_vfio_device_info || true; cat "$WORKDIR/daemon.log"; fail "subsystem-ID identity failed after restart"; }
+echo "restart OK: board_type=${CARD_TYPE} via subsystem ID, no persisted state"
 stop_daemon || fail "phase-3 daemon hung on TERM"
-
-# --- Phase 3b: no state file either — subsystem-ID fallback ------------------
-
-log "phase 3b: fresh daemon, no state file, device on vfio-pci — subsystem ID must identify it"
-sudo rm -f "$STATE"
-run_daemon
-sleep 8
-M=$(metrics) || { cat "$WORKDIR/daemon.log"; fail "metrics endpoint unreachable on :${METRICS_PORT}"; }
-# Serial is telemetry-only, so this entry is serial-less — but the board type
-# must come from config space (subsystem_device), not read "unknown".
-echo "$M" | grep "tt_vfio_device_info" | grep "board_type=\"${CARD_TYPE}\"" \
-  || { echo "$M" | grep tt_vfio_device_info || true; cat "$WORKDIR/daemon.log"; fail "subsystem-ID fallback did not identify the board"; }
-echo "subsystem-ID fallback OK: board_type=${CARD_TYPE} with no state file and no telemetry"
-stop_daemon || fail "phase-3b daemon hung on TERM"
 
 # --- Phase 4: restore-on-exit hands the device back --------------------------
 

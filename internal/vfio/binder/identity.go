@@ -1,7 +1,6 @@
 package binder
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -15,100 +14,53 @@ import (
 // Identity is a device's board identity.
 //
 // n150 and n300 share PCI ID 1e52:401e, so the SKU needs more than the
-// device ID. Two sources, in order:
+// device ID. Two sources:
 //
-//  1. The PCI subsystem device ID. Verified on n150 hardware: it carries the
-//     same board-type code tt-kmd decodes from telemetry (0x0018 = n150), and
-//     config space stays readable no matter which driver is bound — including
-//     vfio-pci. This is how NVIDIA-style config-space identification works.
-//  2. tt-kmd's telemetry sysfs attributes (tt_card_type/tt_serial), readable
-//     only while the device is on tt-kmd. Used as a fallback for boards whose
-//     subsystem ID is not in the table, and as the only source for the serial
-//     number; results persist to a state file that outlives pod restarts.
+//   - BoardType comes from the PCI subsystem device ID (the board's UPI),
+//     readable from config space no matter which driver is bound — including
+//     vfio-pci — so it needs no persisted state and survives pod restarts.
+//     tt-kmd's tt_card_type telemetry attribute is the fallback for boards
+//     missing from the UPI table.
+//   - Serial only exists in tt-kmd's telemetry (tt_serial), readable while
+//     the device is on tt-kmd; it is cached in memory and re-learned the
+//     next time the device is seen there.
 type Identity struct {
-	BoardType string `json:"boardType"`
-	Serial    string `json:"serial"`
+	BoardType string
+	Serial    string
 }
 
-// boardTypeBySubsystem maps the PCI subsystem device ID to the board type.
-// The code space is the same one tt-kmd's tt_card_type decode uses (tt-kmd
-// telemetry.c). Hardware-confirmed via the e2e matrix: n150 = 0x0018,
-// n300 = 0x0014, p150b = 0x0041 (each cross-checked against tt_card_type on
-// the same device). The rest are inferred from tt-kmd's table.
+// boardTypeBySubsystem maps the PCI subsystem device ID to the board
+// product. The code is the board's UPI, mirroring board_upi_map in tt-umd
+// (device/api/umd/device/types/cluster_descriptor_types.hpp) — the same
+// table tt-feature-discovery labels nodes from, so board_type here always
+// agrees with the node's tenstorrent.com/product label. Hardware-confirmed
+// via the e2e matrix: n150 = 0x0018, n300 = 0x0014, p150 = 0x0041 (each
+// cross-checked against tt-kmd's tt_card_type on the same device).
 var boardTypeBySubsystem = map[uint16]string{
 	// Wormhole
 	0x0014: "n300",
 	0x0018: "n150",
-	0x0035: "galaxy-wormhole",
+	0x000b: "galaxy",
+	0x0035: "ubb",
 	// Blackhole
 	0x0036: "p100",
-	0x0040: "p150a",
-	0x0041: "p150b",
-	0x0042: "p150c",
-	0x0043: "p100a",
-	0x0044: "p300b",
-	0x0045: "p300a",
-	0x0046: "p300c",
-	0x0047: "galaxy-blackhole",
-}
-
-// identityState is the on-disk format of the state file.
-type identityState struct {
-	Devices map[string]Identity `json:"devices"` // keyed by BDF
-}
-
-// UseStateFile loads previously recorded identities from path and arranges
-// for newly learned ones to be saved back to it. A missing file is not an
-// error — it just means no device has been identified yet.
-func (b *Binder) UseStateFile(path string) error {
-	b.statePath = path
-
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("reading identity state %s: %w", path, err)
-	}
-
-	var state identityState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("parsing identity state %s: %w", path, err)
-	}
-	for bdf, id := range state.Devices {
-		b.identities[bdf] = id
-	}
-	log.Printf("identity: loaded %d device identities from %s", len(state.Devices), path)
-	return nil
-}
-
-func (b *Binder) saveState() {
-	if b.statePath == "" {
-		return
-	}
-	data, err := json.MarshalIndent(identityState{Devices: b.identities}, "", "  ")
-	if err != nil {
-		log.Printf("identity: marshalling state: %v", err)
-		return
-	}
-	// Write-and-rename so a crash mid-write can't truncate the state file.
-	tmp := b.statePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		log.Printf("identity: writing %s: %v", tmp, err)
-		return
-	}
-	if err := os.Rename(tmp, b.statePath); err != nil {
-		log.Printf("identity: renaming %s: %v", tmp, err)
-	}
+	0x0043: "p100",
+	0x0040: "p150",
+	0x0041: "p150",
+	0x0042: "p150",
+	0x0044: "p300",
+	0x0045: "p300",
+	0x0046: "p300",
+	0x0047: "ubb_blackhole",
 }
 
 // identify determines the device's board identity.
 //
-// Order: cached (memory/state file) → PCI subsystem ID (works regardless of
-// bound driver) → tt-kmd telemetry (only while on tt-kmd). The serial number
-// only exists in telemetry, so a subsystem-identified device still upgrades
-// its entry when telemetry becomes readable. BoardType is "unknown" only
-// when every source fails.
+// BoardType: subsystem UPI (primary — driver-independent and consistent with
+// tt-feature-discovery's product label) → telemetry tt_card_type (fallback
+// for boards missing from the table) → "unknown". Serial: telemetry, when
+// the device happens to be on tt-kmd; a serial-less cached entry upgrades
+// the next time telemetry is readable.
 func (b *Binder) identify(dev pciDevice) Identity {
 	cached, haveCached := b.identities[dev.BDF]
 	if haveCached && cached.Serial != "" {
@@ -117,36 +69,50 @@ func (b *Binder) identify(dev pciDevice) Identity {
 
 	base := filepath.Join(pciDevicesDir(), dev.BDF)
 
-	// Telemetry is the richest source (board type + serial); take it
-	// whenever the device happens to be on tt-kmd.
-	if cardType, err := readTelemetryAttr(base, "tt_card_type"); err == nil {
-		serial, err := readTelemetryAttr(base, "tt_serial")
-		if err != nil {
-			serial = ""
+	boardType, haveType := boardTypeFromSubsystem(base)
+	if !haveType {
+		boardType, haveType = readTelemetryCardType(base)
+	}
+
+	// The serial is telemetry-only; readable while the device is on tt-kmd.
+	serial, err := readTelemetryAttr(base, "tt_serial")
+	if err != nil {
+		serial = ""
+	}
+
+	if !haveType && serial == "" {
+		if haveCached {
+			return cached
 		}
-		id := Identity{BoardType: cardType, Serial: serial}
-		b.identities[dev.BDF] = id
-		log.Printf("identity: %s is a %s (serial %s, via telemetry)", dev.BDF, id.BoardType, id.Serial)
-		b.saveState()
-		return id
+		// Nothing worked. Don't cache: a later pass may catch the device on
+		// tt-kmd after a drift, or the subsystem ID may join the table.
+		return Identity{BoardType: "unknown"}
+	}
+	if !haveType {
+		boardType = "unknown"
 	}
 
-	if haveCached {
-		return cached
+	id := Identity{BoardType: boardType, Serial: serial}
+	if haveCached && serial == "" {
+		// Never downgrade a cached entry that already has a serial source.
+		id.Serial = cached.Serial
 	}
-
-	// Config space: readable even on vfio-pci.
-	if boardType, ok := boardTypeFromSubsystem(base); ok {
-		id := Identity{BoardType: boardType}
-		b.identities[dev.BDF] = id
-		log.Printf("identity: %s is a %s (via subsystem ID)", dev.BDF, id.BoardType)
-		b.saveState()
-		return id
+	if !haveCached || id != cached {
+		log.Printf("identity: %s is a %s (serial %q)", dev.BDF, id.BoardType, id.Serial)
 	}
+	b.identities[dev.BDF] = id
+	return id
+}
 
-	// Nothing worked. Don't cache: a later pass may catch the device on
-	// tt-kmd after a drift, or the subsystem ID may join the table.
-	return Identity{BoardType: "unknown"}
+// readTelemetryCardType is the board-type fallback for devices whose
+// subsystem UPI is not in the table: tt-kmd's own decode, readable only
+// while the device is on tt-kmd.
+func readTelemetryCardType(pciDevDir string) (string, bool) {
+	cardType, err := readTelemetryAttr(pciDevDir, "tt_card_type")
+	if err != nil || cardType == "" || cardType == "unknown" {
+		return "", false
+	}
+	return cardType, true
 }
 
 // boardTypeFromSubsystem identifies the board from the PCI subsystem device

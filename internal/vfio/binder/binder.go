@@ -37,7 +37,6 @@ type Binder struct {
 	restoreOnExit   bool
 	originalDrivers map[string]string // BDF → driver the device was on before we touched it
 	identities      map[string]Identity
-	statePath       string
 }
 
 // New creates a Binder from the given config. If restoreOnExit is true,

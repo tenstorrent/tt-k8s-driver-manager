@@ -26,7 +26,6 @@ func main() {
 		bindInterval  = flag.Duration("bind-interval", 30*time.Second, "how often to re-assert vfio-pci binding")
 		restoreOnExit = flag.Bool("restore-on-exit", false, "attempt to restore original drivers on SIGTERM")
 		metricsAddr   = flag.String("metrics-addr", ":9401", "address for the Prometheus /metrics endpoint (empty to disable)")
-		stateFile     = flag.String("state-file", "", "path to the device identity state file (empty to disable persistence)")
 	)
 	flag.Parse()
 
@@ -51,13 +50,6 @@ func main() {
 	}
 
 	b := binder.New(cfg, *restoreOnExit)
-	if *stateFile != "" {
-		if err := b.UseStateFile(*stateFile); err != nil {
-			// Identity is best-effort; a corrupt state file must not stop
-			// the bind loop.
-			log.Printf("identity state: %v (continuing without persisted identities)", err)
-		}
-	}
 
 	done := make(chan struct{})
 	sigs := make(chan os.Signal, 1)

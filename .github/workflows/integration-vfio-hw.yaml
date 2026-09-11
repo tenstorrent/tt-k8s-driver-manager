@@ -13,7 +13,7 @@ name: integration-vfio-hw
 #   - whether subsystem IDs differ per SKU (logged as a ::notice; if they do,
 #     telemetry-based identity can be replaced by config-space reads)
 #   - bind to vfio-pci works, metrics report the true board_type
-#   - a restart recovers identity from the state file alone
+#   - a restart identifies the board from the PCI subsystem ID alone
 #   - restore-on-exit hands the device back to tt-kmd with the override
 #     cleared (the driver_override newline fix, live)
 
