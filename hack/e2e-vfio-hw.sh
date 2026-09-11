@@ -53,7 +53,20 @@ for _ in $(seq 1 12); do
 done
 SERIAL=$(cat "$SYS"/tenstorrent!*/tt_serial 2>/dev/null | tr -d '[:space:]' || true)
 echo "tt_card_type=${CARD_TYPE:-<unreadable>} tt_serial=${SERIAL:-<unreadable>}"
-[ -n "$CARD_TYPE" ] || fail "tt_card_type unreadable while on tt-kmd — identity mechanism assumption broken (kmd $(cat /sys/module/tenstorrent/version 2>/dev/null))"
+if [ -z "$CARD_TYPE" ]; then
+  echo "== sysfs layout diagnostics =="
+  echo "-- $SYS:"; ls -la "$SYS" || true
+  echo "-- /sys/class dirs mentioning tenstorrent:"
+  find /sys/class -maxdepth 2 -iname '*tenstorrent*' 2>/dev/null || true
+  echo "-- class device attrs:"
+  for d in /sys/class/tenstorrent/*; do
+    [ -e "$d" ] || continue
+    echo "$d -> $(readlink -f "$d")"; ls "$d" || true
+  done
+  echo "-- kmd version: $(cat /sys/module/tenstorrent/version 2>/dev/null)"
+  echo "-- dmesg tail:"; sudo dmesg | grep -i "tenstorrent\|telemetry" | tail -20 || true
+  fail "tt_card_type unreadable while on tt-kmd — identity mechanism assumption broken"
+fi
 
 # The open question from the PR: does config space already distinguish SKUs?
 log "config-space identity (subsystem IDs) — decides if telemetry caching is even needed"
