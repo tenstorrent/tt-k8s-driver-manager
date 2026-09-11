@@ -1,4 +1,4 @@
-# Pin tt-kmd 2.8.0 on every Tenstorrent node. The controller creates a
+# Pin tt-kmd 2.10.0 on every Tenstorrent node. The controller creates a
 # DaemonSet (ttdrv-<name>) that runs the builder image on each match:
 # clones tt-kmd at the requested tag, builds .ko against host kernel
 # headers, insmods, copies the bundled tt-smi venv to /usr/local/bin
@@ -8,5 +8,5 @@ kind: TenstorrentDriverPolicy
 metadata:
   name: default
 spec:
-  version: "2.8.0"
+  version: "2.10.0"
   nodeAffinity: {}

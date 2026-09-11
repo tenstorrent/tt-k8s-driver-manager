@@ -118,7 +118,7 @@ Image registries are public, so this is almost always one of:
 
 ```
 $ kubectl -n tt-k8s-driver-manager-system logs ttdrv-default-...
-ERROR: tt-kmd 2.7.0 loaded with refcnt > 0; cannot reinstall 2.8.0
+ERROR: tt-kmd 2.7.0 loaded with refcnt > 0; cannot reinstall 2.10.0
 Holders: 12345 23456
 Drain workloads holding /dev/tenstorrent and let the next reconcile retry.
 ```

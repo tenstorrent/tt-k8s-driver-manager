@@ -9,7 +9,7 @@ import (
 //
 // +kubebuilder:validation:XValidation:rule="has(self.nodeAffinity) != has(self.nodeSelector)",message="exactly one of spec.nodeAffinity or spec.nodeSelector must be set"
 type TenstorrentDriverPolicySpec struct {
-	// Version is the tt-kmd release, e.g. "2.8.0". Maps to the upstream tag
+	// Version is the tt-kmd release, e.g. "2.10.0". Maps to the upstream tag
 	// ttkmd-<version>.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Pattern=`^[0-9]+\.[0-9]+\.[0-9]+$`
