@@ -1,7 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # UBUNTU_VERSION selects both the base image and the tt-smi release-binary
 # flavor (tt-smi-<v>-ubuntu-<UBUNTU_VERSION>). The binary is a PyInstaller
 # build linked against the glibc of that Ubuntu release, so it must match
-# the host OS — aus2-dev2 hosts run Ubuntu 22.04 (jammy). Bumping the host
+# the host OS. Target hosts run Ubuntu 22.04 (jammy); bumping the host
 # OS requires bumping this too.
 ARG UBUNTU_VERSION=22.04
 ARG TT_SMI_VERSION=5.2.0

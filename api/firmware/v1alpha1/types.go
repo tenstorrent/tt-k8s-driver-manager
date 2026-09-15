@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package v1alpha1
 
 import (
@@ -73,7 +76,7 @@ type UpgradePolicy struct {
 	MaxParallel int32 `json:"maxParallel,omitempty"`
 
 	// FlashTimeoutSeconds is the per-node Job activeDeadlineSeconds.
-	// Default 900s (matches tt-ansible Galaxy headroom; PCIe-only is typically <120s).
+	// Default 900s, which leaves headroom for Galaxy systems; PCIe-only systems typically finish in under 120s.
 	// +kubebuilder:default=900
 	// +kubebuilder:validation:Minimum=60
 	// +optional

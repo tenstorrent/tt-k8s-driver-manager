@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -16,7 +19,7 @@ import (
 )
 
 // defaultFlasherImage is overridable via the FLASHER_IMAGE env var on the controller.
-const defaultFlasherImage = "ghcr.io/tenstorrent/tt-fw-flasher:dev"
+const defaultFlasherImage = "ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher:dev"
 
 // jobName returns a stable, DNS-safe Job name for a (CR, node, version) triple.
 // Length-capped at 63 chars; suffix is a short hash for uniqueness when the

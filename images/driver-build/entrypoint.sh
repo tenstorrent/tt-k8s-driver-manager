@@ -1,8 +1,11 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # Builder entrypoint. Three modes, decided per-startup:
 #
 #   1. HOST-MANAGED — host has its own DKMS/apt-installed tt-kmd (e.g.
-#      tt-ansible's tt_kmd role). Builder stands down: doesn't touch
+#      configuration management). Builder stands down: doesn't touch
 #      module, doesn't build, sets node label install-mode=host so the
 #      operator surface honestly reports who owns the install. Mirrors
 #      RBLN's rebellions.ai/npu.deploy.driver=pre-installed pattern.
@@ -121,7 +124,7 @@ install_udev_rule() {
 
 # install_tt_smi copies the self-contained tt-smi binary to the host.
 # Skip in host-managed mode — the host already has its own tt-smi from
-# tt-ansible / apt and we shouldn't overwrite it.
+# configuration management / apt and we should not overwrite it.
 install_tt_smi() {
     [ -n "${TT_SMI_VERSION:-}" ] || return 0
     if [ ! -d /host/usr/local/bin ]; then

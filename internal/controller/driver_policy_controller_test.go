@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -34,7 +37,7 @@ func TestPodEnv(t *testing.T) {
 	pod := &corev1.Pod{Spec: corev1.PodSpec{
 		Containers: []corev1.Container{{Env: []corev1.EnvVar{
 			{Name: "TT_KMD_VERSION", Value: "2.8.0"},
-			{Name: "NODE_NAME", Value: "e01cs01"},
+			{Name: "NODE_NAME", Value: "node-1"},
 		}}},
 	}}
 	if got := podEnv(pod, "TT_KMD_VERSION"); got != "2.8.0" {
@@ -436,7 +439,7 @@ func TestRecordNodeStateEvent(t *testing.T) {
 	t.Run("Warning for BuilderCrashLoop", func(t *testing.T) {
 		fr := record.NewFakeRecorder(4)
 		r := &DriverPolicyReconciler{Recorder: fr}
-		r.recordNodeStateEvent(cr, "e01cs01",
+		r.recordNodeStateEvent(cr, "node-1",
 			driverv1alpha1.DriverNodeStateFailed, ReasonBuilderCrashLoop, "boom")
 		select {
 		case evt := <-fr.Events:
@@ -446,7 +449,7 @@ func TestRecordNodeStateEvent(t *testing.T) {
 			if !strings.Contains(evt, ReasonBuilderCrashLoop) {
 				t.Errorf("event %q missing reason %q", evt, ReasonBuilderCrashLoop)
 			}
-			if !strings.Contains(evt, "e01cs01") {
+			if !strings.Contains(evt, "node-1") {
 				t.Errorf("event %q missing node name", evt)
 			}
 		default:
@@ -457,7 +460,7 @@ func TestRecordNodeStateEvent(t *testing.T) {
 	t.Run("Normal for HostManagedKMD", func(t *testing.T) {
 		fr := record.NewFakeRecorder(4)
 		r := &DriverPolicyReconciler{Recorder: fr}
-		r.recordNodeStateEvent(cr, "e01cs02",
+		r.recordNodeStateEvent(cr, "node-2",
 			driverv1alpha1.DriverNodeStateHostManaged, ReasonHostManagedKMD, "DKMS detected")
 		select {
 		case evt := <-fr.Events:
@@ -475,14 +478,14 @@ func TestRecordNodeStateEvent(t *testing.T) {
 	t.Run("nil Recorder is a no-op (no NPE)", func(t *testing.T) {
 		r := &DriverPolicyReconciler{}
 		// Just shouldn't panic.
-		r.recordNodeStateEvent(cr, "e01cs03",
+		r.recordNodeStateEvent(cr, "node-3",
 			driverv1alpha1.DriverNodeStateHostManaged, ReasonHostManagedKMD, "")
 	})
 
 	t.Run("empty reason is a no-op", func(t *testing.T) {
 		fr := record.NewFakeRecorder(4)
 		r := &DriverPolicyReconciler{Recorder: fr}
-		r.recordNodeStateEvent(cr, "e01cs04",
+		r.recordNodeStateEvent(cr, "node-4",
 			driverv1alpha1.DriverNodeStatePending, "", "")
 		select {
 		case evt := <-fr.Events:

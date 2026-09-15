@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 name: ci
 
 on:
@@ -17,7 +20,7 @@ jobs:
       - name: Verify generated code is up to date
         run: |
           go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.5
-          $(go env GOPATH)/bin/controller-gen object paths=./api/...
+          $(go env GOPATH)/bin/controller-gen object:headerFile=hack/boilerplate.go.txt paths=./api/...
           $(go env GOPATH)/bin/controller-gen crd  paths=./api/...        output:crd:dir=./config/crd/bases
           $(go env GOPATH)/bin/controller-gen rbac:roleName=tt-k8s-driver-manager paths=./internal/... output:rbac:dir=./config/rbac
           git diff --exit-code -- api/ config/ \

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 {{- if .Values.metrics.serviceMonitor.enabled }}
 {{- if not .Values.metrics.service.enabled }}
 {{- fail "metrics.serviceMonitor.enabled requires metrics.service.enabled — a ServiceMonitor has nothing to select without the metrics Service" }}

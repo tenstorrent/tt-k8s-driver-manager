@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Build the versioned tt-operator docs site for GitHub Pages.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
+# Build the versioned tt-k8s-driver-manager docs site for GitHub Pages.
 #
 # Publishes the current checkout as `latest/` plus every released tag (vX.Y.Z
 # that contains docs/) as `<tag>/`, with a root redirect to `latest/` and a
 # shared versions list so the docs.tenstorrent.com versions widget can switch
-# between them. Version URLs resolve at /tt-operator/<version>/.
+# between them. Version URLs resolve at /tt-k8s-driver-manager/<version>/.
 #
 #   output/
 #     index.html   -> redirect to latest/

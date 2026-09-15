@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 // Package drain provides controller-agnostic primitives for cordoning a
 // node, listing device-using pods, and evicting them via the policy/v1
 // Eviction subresource.
