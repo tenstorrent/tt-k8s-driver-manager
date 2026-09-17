@@ -141,6 +141,17 @@ Drain those pods (`kubectl delete pod` for bare pods,
 `kubectl scale deploy --replicas=0` for Deployments). The next
 reconcile will see `refcnt=0` and proceed.
 
+That query only finds pods that `hostPath`-mount `/dev/tenstorrent`. The
+telemetry collector and the fabric-manager agent take the device via
+`privileged: true` instead, so they show up in neither the query nor the
+controller's pass-1 drain, and being DaemonSets they outlive
+`kubectl drain --ignore-daemonsets`. Stand them down with the
+[deploy-gate labels](driver.md#deploy-gates) — the controller does this for you
+during an upgrade for every key in `controller.deployGates`, which by
+default covers telemetry only. The fabric-manager agent honors
+`tenstorrent.com/deploy.tt-fabric-manager` as of tt-fabric-manager
+0.2.29; add that key to `deployGates` to have upgrades cover it too.
+
 ## `/bin/sh: 1: gcc-12: not found`
 
 ```
