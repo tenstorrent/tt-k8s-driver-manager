@@ -32,21 +32,6 @@ License, or the ISC License.
   k8s.io/client-go                          Apache-2.0  Copyright The Kubernetes Authors
   sigs.k8s.io/controller-runtime            Apache-2.0  Copyright The Kubernetes Authors
 
-Software obtained at container-image build time or at run time (not included
-in this repository):
-
-  tt-kmd (https://github.com/tenstorrent/tt-kmd)          GPL-2.0
-    The Tenstorrent kernel-mode driver. The builder image clones and compiles
-    tt-kmd on the target node at run time and installs its udev rules file
-    on the host from that checkout; no tt-kmd source is included in this
-    repository or in the published container images.
-  tt-smi (https://github.com/tenstorrent/tt-smi)          Apache-2.0
-    Prebuilt release binaries are downloaded into the builder and flasher images.
-  tt-flash (https://github.com/tenstorrent/tt-flash)      Apache-2.0
-    Installed into the flasher image.
-  tt-system-firmware (https://github.com/tenstorrent/tt-system-firmware)  Apache-2.0
-    Firmware bundles are downloaded by the flasher Job at run time.
-
 Base container images: golang (BSD-3-Clause), gcr.io/distroless/static
 (Apache-2.0), ubuntu (various; see https://ubuntu.com/legal), and
 curlimages/curl (curl license).
