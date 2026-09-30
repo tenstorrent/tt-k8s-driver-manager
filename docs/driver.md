@@ -179,11 +179,15 @@ $ kubectl get ttdp default -o jsonpath='{.status.nodes}' | jq
 `controller.deployGates` in the chart's `values.yaml` is the list of
 node-label keys the controller flips off (`=false`) during a kmd
 upgrade and removes on uncordon. Sibling DaemonSets that consume
-`/dev/tenstorrent` (tt-telemetry, future workloads) must include
-`NotIn ["false"]` on the same label key in their `nodeAffinity` — the
-chart-level pattern. Default list:
-`tenstorrent.com/deploy.tt-telemetry`. Set to `[]` to disable the
-gate-flip entirely.
+`/dev/tenstorrent` must include `NotIn ["false"]` on the same label key
+in their `nodeAffinity` — the chart-level pattern. Two ship it today:
+tt-telemetry (`tenstorrent.com/deploy.tt-telemetry`) and, as of 0.2.29,
+the tt-fabric-manager agent
+(`tenstorrent.com/deploy.tt-fabric-manager`).
+
+Default list: `tenstorrent.com/deploy.tt-telemetry` only — add the
+fabric-manager key to cover the agent as well. Set to `[]` to disable
+the gate-flip entirely.
 
 ### Downgrade
 
