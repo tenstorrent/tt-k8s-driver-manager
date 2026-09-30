@@ -141,6 +141,18 @@ type FlasherOverride struct {
 	// the target version will still skip the flash unless ForceWrite is set.
 	// +optional
 	ContinueOnReadbackFailure bool `json:"continueOnReadbackFailure,omitempty"`
+
+	// HomogenizeFirmwareVersions, when true, instructs the flasher to pass
+	// --force to tt-flash only when the node's chips report different
+	// firmware versions from each other. Without --force, tt-flash skips a
+	// chip already newer than the target, the post-flash readback fails, and
+	// the node stays Failed. Unlike ForceWrite, the "already at target, exit
+	// 0" short-circuit and the post-flash readback assertion still apply: a
+	// node whose chips all report the same version is never force-flashed by
+	// this flag. No effect when pre-flash readback is unavailable, or when
+	// ForceWrite is already set.
+	// +optional
+	HomogenizeFirmwareVersions bool `json:"homogenizeFirmwareVersions,omitempty"`
 }
 
 // TenstorrentFirmwarePolicyStatus is the observed state.

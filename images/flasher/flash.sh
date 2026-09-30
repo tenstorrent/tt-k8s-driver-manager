@@ -16,6 +16,11 @@
 #   TT_CONTINUE_ON_READBACK_FAILURE    "true" → proceed even if tt-smi pre-flash readback fails
 #                                      after heal (chip wedged / driver detached). Derived from
 #                                      spec.flasher.continueOnReadbackFailure.
+#   TT_HOMOGENIZE_FIRMWARE_VERSIONS    "true" → add --force to tt-flash only when the pre-flash
+#                                      readback shows chips on different versions from each
+#                                      other. Keeps the "already at target" skip and the
+#                                      post-flash readback assertion. Derived from
+#                                      spec.flasher.homogenizeFirmwareVersions.
 #   MOCK                               "true" → no hardware; simulate a flash. For kind dev.
 #   MOCK_FAIL                          "true" → simulated failure path (for testing UpgradeFailed).
 #
@@ -154,11 +159,33 @@ if [[ "${TT_FORCE_WRITE:-false}" != "true" ]] && [[ -n "$current" ]] && [[ "$cur
   fi
 fi
 
+# HomogenizeFirmwareVersions: tt-flash skips any chip already newer than the
+# target ("ROM does not need to be updated"), so a node with mixed versions
+# can never pass the readback assertion below without --force. Add --force
+# only when the chips disagree with each other; a node whose chips all report
+# the same version is left to the normal path. Needs a usable readback — with
+# no versions (or any chip reporting "?") there is nothing to compare, so the
+# flash proceeds without --force.
+flash_args="${TT_FLASH_ARGS:-}"
+if [[ "${TT_HOMOGENIZE_FIRMWARE_VERSIONS:-false}" == "true" ]] && [[ "${TT_FORCE_WRITE:-false}" != "true" ]]; then
+  # read -a splits without glob expansion, so a "?" version stays literal.
+  read -r -a chip_versions <<<"$current"
+  distinct=$(printf '%s\n' "${chip_versions[@]}" | sort -u | tr '\n' ' ')
+  if [[ -z "$current" ]] || [[ " $distinct" == *" ? "* ]]; then
+    log "homogenize: pre-flash versions unavailable ('${current}'); not adding --force"
+  elif [[ $(wc -w <<<"$distinct") -gt 1 ]]; then
+    log "homogenize: chips report mixed versions (${distinct% }); adding --force to set all to $TT_FW_READBACK"
+    flash_args="${flash_args:+$flash_args }--force"
+  else
+    log "homogenize: all chips report ${distinct% }; not adding --force"
+  fi
+fi
+
 # --- 2. Flash --------------------------------------------------------------
-log "flash: tt-flash --no-color flash --fw-tar $TT_FW_BUNDLE_PATH ${TT_FLASH_ARGS:-}"
+log "flash: tt-flash --no-color flash --fw-tar $TT_FW_BUNDLE_PATH ${flash_args}"
 flash_log=$(mktemp)
 # shellcheck disable=SC2086
-if ! tt-flash --no-color flash --fw-tar "$TT_FW_BUNDLE_PATH" ${TT_FLASH_ARGS:-} 2>&1 | tee "$flash_log"; then
+if ! tt-flash --no-color flash --fw-tar "$TT_FW_BUNDLE_PATH" ${flash_args} 2>&1 | tee "$flash_log"; then
   log "ERROR: tt-flash exited non-zero"
   exit 1
 fi

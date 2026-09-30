@@ -87,6 +87,18 @@ spec:
                       exit 0" short-circuit. Use for re-flashing the same version, downgrades,
                       or suspected silent ROM corruption.
                     type: boolean
+                  homogenizeFirmwareVersions:
+                    description: |-
+                      HomogenizeFirmwareVersions, when true, instructs the flasher to pass
+                      --force to tt-flash only when the node's chips report different
+                      firmware versions from each other. Without --force, tt-flash skips a
+                      chip already newer than the target, the post-flash readback fails, and
+                      the node stays Failed. Unlike ForceWrite, the "already at target, exit
+                      0" short-circuit and the post-flash readback assertion still apply: a
+                      node whose chips all report the same version is never force-flashed by
+                      this flag. No effect when pre-flash readback is unavailable, or when
+                      ForceWrite is already set.
+                    type: boolean
                   image:
                     description: Image overrides the flasher image.
                     type: string
