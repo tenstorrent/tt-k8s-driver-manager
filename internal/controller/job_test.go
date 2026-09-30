@@ -38,9 +38,11 @@ func TestBuildFlashJobHomogenizeFirmwareVersionsEnv(t *testing.T) {
 		wantFlashArgs string
 	}{
 		{
+			// homogenizeFirmwareVersions defaults to true when the CR has
+			// no flasher override.
 			name:      "no flasher override",
 			flasher:   nil,
-			wantHomog: "false", wantForce: "false", wantFlashArgs: "",
+			wantHomog: "true", wantForce: "false", wantFlashArgs: "",
 		},
 		{
 			// The script decides whether --force is needed from the
