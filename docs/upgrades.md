@@ -86,7 +86,7 @@ Per-node sequence:
 Bump `spec.version` on the `TenstorrentFirmwarePolicy`:
 
 ```bash
-kubectl patch ttfwp default --type merge -p '{"spec":{"version":"19.9.0"}}'
+kubectl patch ttfwp default --type merge -p '{"spec":{"version":"19.12.0"}}'
 ```
 
 Per-node sequence is the state machine described in [Firmware Management](firmware.md):
