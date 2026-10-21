@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 FROM golang:1.26 AS builder
 WORKDIR /workspace
 COPY go.mod go.sum ./

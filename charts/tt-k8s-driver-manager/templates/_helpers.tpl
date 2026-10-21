@@ -1,3 +1,6 @@
+{{/* SPDX-License-Identifier: Apache-2.0 */}}
+{{/* SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc. */}}
+
 {{- define "tt-k8s-driver-manager.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}

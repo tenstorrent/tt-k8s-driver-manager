@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -711,7 +714,7 @@ func (r *DriverPolicyReconciler) buildDaemonSet(cr *driverv1alpha1.TenstorrentDr
 							{Name: "tt-kmd-cache", MountPath: "/var/cache/tt-kmd"},
 							// Read-only view of host DKMS state so the
 							// entrypoint can detect a host-managed install
-							// (e.g. tt-ansible's tt_kmd role) and stand
+							// (e.g. a configuration-management tool) and stand
 							// down — see install-mode label.
 							{Name: "var-lib-dkms", MountPath: "/var/lib/dkms", ReadOnly: true},
 							// Host /usr/local/bin for tt-smi delivery:

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -171,7 +174,7 @@ func TestRecordDrainTimeoutMetrics_OncePerStall(t *testing.T) {
 	})
 
 	stuck := []firmwarev1alpha1.NodeStatus{{
-		Name:    "e01cs01",
+		Name:    "node-1",
 		State:   firmwarev1alpha1.NodeStateFailed,
 		Message: MessageDrainTimeoutPrefix + "10m0s; blocking pods: ns/pod",
 	}}

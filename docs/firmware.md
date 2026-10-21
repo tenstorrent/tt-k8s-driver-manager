@@ -27,7 +27,9 @@ What happens:
    - Downloads `fw_pack-<version>.fwbundle` from
      `github.com/tenstorrent/tt-system-firmware` releases.
    - Runs `tt-flash --no-color flash <bundle>` (with `--force` if
-     `spec.flasher.forceWrite=true`).
+     `spec.flasher.forceWrite=true`, or if
+     `spec.flasher.homogenizeFirmwareVersions=true` and the pre-flash
+     readback shows chips on different versions).
    - Asserts post-flash readback equals `spec.readbackVersion` (default
      `<version>.0` to match the firmware bundle's readback format).
 3. Job's exit code is the controller's signal — no separate readback
@@ -53,6 +55,7 @@ What happens:
 | `flasher.imagePullPolicy` | `IfNotPresent` | Override for the above. |
 | `flasher.forceWrite` | `false` | Bypass the "current readback already matches target" short-circuit and pass `--force` to tt-flash. Use for re-flashing the same version, downgrades, or suspected silent ROM corruption. |
 | `flasher.continueOnReadbackFailure` | `false` | Continue with the flash even if `tt-smi` pre-flash readback fails (chip wedged / driver detached). Independent of `forceWrite`: a chip that subsequently recovers and reports the target version will still skip the flash unless `forceWrite` is also set. |
+| `flasher.homogenizeFirmwareVersions` | `false` | Pass `--force` to tt-flash only when the pre-flash readback shows the node's chips on different versions from each other, so a chip newer than the target is brought back in line. Unlike `forceWrite`, the "already at target" short-circuit and the post-flash readback assertion still apply. No effect when pre-flash readback is unavailable or `forceWrite` is set. |
 
 ## CR examples
 
@@ -83,6 +86,23 @@ spec:
 
 `forceWrite` bypasses the "already at target" short-circuit and passes
 `--force` to tt-flash — overwrite, readback re-asserts.
+
+### Mixed versions on one node
+
+```yaml
+spec:
+  version: "19.11.0"
+  flasher:
+    homogenizeFirmwareVersions: true
+```
+
+A node with seven chips on `19.11.0.0` and one on `19.13.1.0` fails
+without this: tt-flash skips the newer chip ("ROM does not need to be
+updated") and the readback assertion rejects the result. With
+`homogenizeFirmwareVersions`, the flasher sees the mixed readback and adds
+`--force`, bringing every chip to the target. Nodes whose chips already
+agree are unaffected — all at the target still skips the flash, and all on
+one other version takes the normal path.
 
 ### Downgrade
 

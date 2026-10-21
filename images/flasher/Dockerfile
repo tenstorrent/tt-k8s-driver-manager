@@ -1,9 +1,12 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # Flasher image — runs as a per-node Job under the operator.
 # Bundles tt-flash + the standalone tt-smi release binary + a small
 # entrypoint that asserts readback.
 #
-# Pin the *minimum* tool versions here (matching tt_firmware/defaults in
-# tenstorrent/tt-ansible): bumping these requires a new image tag.
+# Pin the *minimum* tool versions here; bumping these requires a new image
+# tag.
 
 # UBUNTU_VERSION selects both the base image and the tt-smi release-binary
 # flavor (tt-smi-<v>-ubuntu-<UBUNTU_VERSION>). The binary is PyInstaller

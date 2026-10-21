@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package v1alpha1
 
 import (
@@ -233,7 +236,7 @@ type DriverNodeStatus struct {
 // straight from Pending → Upgrading → Done.
 //
 // HostManaged is a terminal non-failure: the node's host already owns
-// the kmd install (DKMS / apt / tt-ansible) and the operator has stood
+// the kmd install (DKMS, apt, or configuration management) and the operator has stood
 // down. Distinct from Done so operators can tell the difference between
 // "operator installed it" and "host installed it; operator is idle"
 // without inspecting the install-mode label.

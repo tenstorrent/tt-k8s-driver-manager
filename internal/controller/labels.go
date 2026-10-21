@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 const (
@@ -26,7 +29,7 @@ const (
 
 	// LabelInstallMode reports how tt-kmd got onto this node.
 	//   "container" — operator built + insmod'd via the builder pod
-	//   "host"      — pre-existing host install (DKMS, apt, tt-ansible).
+	//   "host"      — pre-existing host install (DKMS, apt, configuration management).
 	//                 Operator stands down; doesn't touch the module.
 	// The builder pod sets this label itself at startup based on
 	// /var/lib/dkms/tenstorrent and /usr/src/tenstorrent-* probes.
