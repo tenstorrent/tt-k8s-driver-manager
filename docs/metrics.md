@@ -62,6 +62,18 @@ curl -s localhost:8080/metrics | grep -E '^tt(driver|fw)_'
 | `ttfw_errors_total` | counter | `cr`, `stage` | Errors by reconcile stage. |
 | `ttfw_last_successful_reconcile_timestamp_seconds` | gauge | `cr` | Unix time of the last reconcile that returned no error. |
 
+## VFIO metrics
+
+Exported by the `vfio-manage` DaemonSet on its own port, not by the
+controller — see [VFIO passthrough](vfio.md). Each pod reports only the node
+it runs on, so aggregate across instances for a fleet view.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `tt_vfio_devices_bound_total` | gauge | `resource` | Devices currently bound to `vfio-pci` on this node. A configured resource with no matching hardware reports 0. |
+| `tt_vfio_bind_errors_total` | counter | `action` | Failed `bind` / `unbind` operations. Sustained growth means the binder is retrying a device it cannot claim. |
+| `tt_vfio_noiommu_mode` | gauge | — | 1 when `vfio-pci` is running without an IOMMU, which provides no isolation between the guest and the host. Alert on this being 1 anywhere. |
+
 ## Built-ins worth knowing
 
 From controller-runtime and client-go, per controller (`TenstorrentDriverPolicy`,
