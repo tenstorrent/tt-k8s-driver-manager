@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -16,7 +19,7 @@ import (
 )
 
 // defaultFlasherImage is overridable via the FLASHER_IMAGE env var on the controller.
-const defaultFlasherImage = "ghcr.io/tenstorrent/tt-fw-flasher:dev"
+const defaultFlasherImage = "ghcr.io/tenstorrent/tt-k8s-driver-manager-flasher:dev"
 
 // jobName returns a stable, DNS-safe Job name for a (CR, node, version) triple.
 // Length-capped at 63 chars; suffix is a short hash for uniqueness when the
@@ -90,6 +93,7 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 	pullPolicy := corev1.PullIfNotPresent
 	forceWrite := false
 	continueOnReadbackFailure := false
+	homogenizeFirmwareVersions := true
 	if cr.Spec.Flasher != nil {
 		if cr.Spec.Flasher.Image != "" {
 			image = cr.Spec.Flasher.Image
@@ -99,11 +103,14 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 		}
 		forceWrite = cr.Spec.Flasher.ForceWrite
 		continueOnReadbackFailure = cr.Spec.Flasher.ContinueOnReadbackFailure
+		homogenizeFirmwareVersions = cr.Spec.Flasher.HomogenizeFirmwareVersions
 	}
 
 	// ForceWrite bypasses both the script-level "already at target" skip and
 	// tt-flash's own version-match check. ContinueOnReadbackFailure independently
 	// lets the script proceed when tt-smi can't read the chip.
+	// HomogenizeFirmwareVersions leaves TT_FLASH_ARGS alone: whether --force is
+	// needed depends on the pre-flash readback, so the script decides.
 	flashArgs := ""
 	if forceWrite {
 		flashArgs = "--force"
@@ -179,6 +186,7 @@ func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, def
 								{Name: "TT_FLASH_ARGS", Value: flashArgs},
 								{Name: "TT_FORCE_WRITE", Value: boolEnv(forceWrite)},
 								{Name: "TT_CONTINUE_ON_READBACK_FAILURE", Value: boolEnv(continueOnReadbackFailure)},
+								{Name: "TT_HOMOGENIZE_FIRMWARE_VERSIONS", Value: boolEnv(homogenizeFirmwareVersions)},
 							},
 							// /dev/tenstorrent comes from privileged's auto-mounted /dev
 							// (containerd bind-mounts host /dev into privileged containers).

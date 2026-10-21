@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package controller
 
 import (
@@ -900,6 +903,9 @@ func TestReconcile_AlreadyAtDesiredVersion_NoCordonNoJob(t *testing.T) {
 	}
 	if len(got.Status.Nodes) != 1 || got.Status.Nodes[0].State != firmwarev1alpha1.NodeStateDone {
 		t.Fatalf("expected node state Done, got %+v", got.Status.Nodes)
+	}
+	if got.Status.Nodes[0].Reason != ReasonAlreadyUpToDate {
+		t.Errorf("expected reason %q, got %q", ReasonAlreadyUpToDate, got.Status.Nodes[0].Reason)
 	}
 	if got.Status.Nodes[0].Message != MessageAlreadyUpToDate {
 		t.Errorf("expected message %q, got %q", MessageAlreadyUpToDate, got.Status.Nodes[0].Message)

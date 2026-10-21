@@ -1,8 +1,11 @@
 #!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # Builder entrypoint. Three modes, decided per-startup:
 #
 #   1. HOST-MANAGED — host has its own DKMS/apt-installed tt-kmd (e.g.
-#      tt-ansible's tt_kmd role). Builder stands down: doesn't touch
+#      configuration management). Builder stands down: doesn't touch
 #      module, doesn't build, sets node label install-mode=host so the
 #      operator surface honestly reports who owns the install. Mirrors
 #      RBLN's rebellions.ai/npu.deploy.driver=pre-installed pattern.
@@ -26,7 +29,8 @@ KVER=$(uname -r)
 EXPECTED="${TT_KMD_VERSION:?TT_KMD_VERSION env var required}"
 CACHE_DIR="/var/cache/tt-kmd/${KVER}/${EXPECTED}"
 KO_PATH="${CACHE_DIR}/${MODULE}.ko"
-UDEV_BUNDLED_PATH="/usr/local/share/tt-k8s-driver-manager/udev-50-tenstorrent.rules"
+UDEV_RULE=udev-50-tenstorrent.rules
+UDEV_CACHE_PATH="${CACHE_DIR}/${UDEV_RULE}"
 UDEV_HOST_PATH="/host/etc/udev/rules.d/50-tenstorrent.rules"
 READY_MARKER=/tmp/ready
 
@@ -92,20 +96,23 @@ host_install_detected() {
 
 # install_udev_rule stages tt-kmd's udev rule on the host so
 # /dev/tenstorrent/* land with the same MODE="0666" that a DKMS/apt
-# install gives. The rule is bundled in the image (see Dockerfile);
-# we also chmod the already-created device nodes since the rule only
-# applies to future device events. Idempotent; safe to run every
-# reconcile.
+# install gives. The rule comes from the tt-kmd checkout we build the
+# module from and is cached next to the .ko, so the image itself
+# carries no tt-kmd content. We also chmod the already-created device
+# nodes since the rule only applies to future device events.
+# Idempotent; safe to run every reconcile.
 install_udev_rule() {
     if [ ! -d /host/etc/udev/rules.d ]; then
         echo "WARN: /host/etc/udev/rules.d not mounted; skipping udev rule install"
         return 0
     fi
-    if [ -f "${UDEV_BUNDLED_PATH}" ]; then
-        install -m 0644 "${UDEV_BUNDLED_PATH}" "${UDEV_HOST_PATH}"
+    if [ -f "${UDEV_CACHE_PATH}" ]; then
+        install -m 0644 "${UDEV_CACHE_PATH}" "${UDEV_HOST_PATH}"
         echo "installed udev rule at host:${UDEV_HOST_PATH#/host}"
+    elif [ -f "${UDEV_HOST_PATH}" ]; then
+        echo "udev rule not in cache; keeping existing host:${UDEV_HOST_PATH#/host}"
     else
-        echo "WARN: ${UDEV_BUNDLED_PATH} missing from image; skipping rule install"
+        echo "WARN: ${UDEV_CACHE_PATH} missing and no rule on host; skipping rule install"
     fi
     if [ -d /host/dev/tenstorrent ]; then
         for dev in /host/dev/tenstorrent/[0-9]*; do
@@ -117,7 +124,7 @@ install_udev_rule() {
 
 # install_tt_smi copies the self-contained tt-smi binary to the host.
 # Skip in host-managed mode — the host already has its own tt-smi from
-# tt-ansible / apt and we shouldn't overwrite it.
+# configuration management / apt and we should not overwrite it.
 install_tt_smi() {
     [ -n "${TT_SMI_VERSION:-}" ] || return 0
     if [ ! -d /host/usr/local/bin ]; then
@@ -226,7 +233,9 @@ if [ ! -f "/lib/modules/${KVER}/build/Makefile" ]; then
     exit 1
 fi
 
-if [ ! -f "${KO_PATH}" ]; then
+# A cache entry written before the udev rule was cached alongside the
+# .ko has only the module; treat it as a miss so the rule gets staged.
+if [ ! -f "${KO_PATH}" ] || [ ! -f "${UDEV_CACHE_PATH}" ]; then
     echo "cache miss for ${KVER}/${EXPECTED}; cloning tt-kmd + building"
     SRC=$(mktemp -d)
     git clone --depth 1 --branch "ttkmd-${EXPECTED}" \
@@ -234,6 +243,7 @@ if [ ! -f "${KO_PATH}" ]; then
     make -j"$(nproc)" -C "/lib/modules/${KVER}/build" M="${SRC}" modules
     mkdir -p "${CACHE_DIR}"
     cp "${SRC}/${MODULE}.ko" "${KO_PATH}"
+    cp "${SRC}/${UDEV_RULE}" "${UDEV_CACHE_PATH}"
     rm -rf "${SRC}"
     echo "built ${KO_PATH}"
 else

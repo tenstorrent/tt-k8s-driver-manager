@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # One-off Pod to validate the containerized tt-kmd build + load path on a
 # single node. Replace `image:` with whatever tag you built locally, e.g.
 #   docker build -t ttkmd-build:dev images/driver-build
