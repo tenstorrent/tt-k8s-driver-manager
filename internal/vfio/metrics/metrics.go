@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 // Package metrics exposes the Prometheus endpoint for the vfio-manage
 // daemon.
 //

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 // Package metrics holds the Prometheus metrics tt-k8s-driver-manager
 // exports next to controller-runtime's built-ins (controller_runtime_*,
 // workqueue_*, rest_client_*, go_*, process_*).

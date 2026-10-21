@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 // Package binder implements the vfio-pci bind/unbind loop. It continuously
 // asserts that every configured PCI device is bound to vfio-pci,
 // re-asserting on each tick so a device that drifts off the driver (host

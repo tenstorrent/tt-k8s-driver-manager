@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 # vfio-manage: privileged DaemonSet that binds Tenstorrent PCI devices to
 # vfio-pci. Built from the repo root so it shares the controller's module.
 #

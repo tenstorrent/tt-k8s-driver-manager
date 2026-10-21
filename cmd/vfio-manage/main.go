@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 // Command vfio-manage binds Tenstorrent PCI devices to the vfio-pci driver
 // so they can be passed through to VMs.
 //

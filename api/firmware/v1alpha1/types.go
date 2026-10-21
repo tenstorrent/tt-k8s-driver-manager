@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+
 package v1alpha1
 
 import (
@@ -73,7 +76,7 @@ type UpgradePolicy struct {
 	MaxParallel int32 `json:"maxParallel,omitempty"`
 
 	// FlashTimeoutSeconds is the per-node Job activeDeadlineSeconds.
-	// Default 900s (matches tt-ansible Galaxy headroom; PCIe-only is typically <120s).
+	// Default 900s, which leaves headroom for Galaxy systems; PCIe-only systems typically finish in under 120s.
 	// +kubebuilder:default=900
 	// +kubebuilder:validation:Minimum=60
 	// +optional
@@ -138,6 +141,18 @@ type FlasherOverride struct {
 	// the target version will still skip the flash unless ForceWrite is set.
 	// +optional
 	ContinueOnReadbackFailure bool `json:"continueOnReadbackFailure,omitempty"`
+
+	// HomogenizeFirmwareVersions, when true, instructs the flasher to pass
+	// --force to tt-flash only when the node's chips report different
+	// firmware versions from each other. Without --force, tt-flash skips a
+	// chip already newer than the target, the post-flash readback fails, and
+	// the node stays Failed. Unlike ForceWrite, the "already at target, exit
+	// 0" short-circuit and the post-flash readback assertion still apply: a
+	// node whose chips all report the same version is never force-flashed by
+	// this flag. No effect when pre-flash readback is unavailable, or when
+	// ForceWrite is already set.
+	// +optional
+	HomogenizeFirmwareVersions bool `json:"homogenizeFirmwareVersions,omitempty"`
 }
 
 // TenstorrentFirmwarePolicyStatus is the observed state.
@@ -181,6 +196,15 @@ type NodeStatus struct {
 
 	// State is the per-node upgrade state.
 	State NodeState `json:"state"`
+
+	// Reason is a stable, programmatic CamelCase code explaining why the
+	// node is in its current State — populated for non-trivial outcomes
+	// (FlashJobFailed, FlasherImagePullFailed, DrainTimeout, Paused, ...)
+	// so `kubectl describe ttfwp` surfaces the cause without digging into
+	// operator logs. Empty when the state is self-explanatory (e.g. a
+	// Pending node simply waiting on a maxParallel slot).
+	// +optional
+	Reason string `json:"reason,omitempty"`
 
 	// CurrentVersion is the readback fw_bundle_version from the most recent flash.
 	// +optional
