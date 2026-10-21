@@ -209,3 +209,12 @@ const (
 	// Ready condition or trip haltOnFailure.
 	ReasonTransientAPIError = "TransientAPIError"
 )
+
+// ReasonAlreadyUpToDate: the node's recorded readback already matches
+// the CR's target version, so the controller declared it Done without
+// cordoning, draining, or spawning a Job. See MessageAlreadyUpToDate.
+const ReasonAlreadyUpToDate = "AlreadyUpToDate"
+
+// MessageAlreadyUpToDate is set on a node the controller declined to touch
+// because its recorded readback already matches the CR's target version.
+const MessageAlreadyUpToDate = "already at desired firmware version; no flash needed"

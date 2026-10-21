@@ -267,14 +267,11 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			if ns.State == firmwarev1alpha1.NodeStateDone {
 				// Readback version = what tt-smi reports after a successful
 				// flash. tt-smi appends a fourth component to the bundle
-				// version (a 19.8.0 bundle reads back as 19.8.0.0), so default
-				// to "<spec.version>.0" unless spec.readbackVersion overrides
-				// it. Label is for selectors; annotation is a human-readable
-				// history pointer.
-				readback := cr.Spec.ReadbackVersion
-				if readback == "" {
-					readback = cr.Spec.Version + ".0"
-				}
+				// version (a 19.8.0 bundle reads back as 19.8.0.0), so
+				// expectedReadback defaults to "<spec.version>.0" unless
+				// spec.readbackVersion overrides it. Label is for selectors;
+				// annotation is a human-readable history pointer.
+				readback := expectedReadback(cr)
 				if node.Annotations[AnnoCurrentVersion] != readback {
 					_ = r.annotateNode(ctx, node, map[string]string{AnnoCurrentVersion: readback})
 				}
@@ -447,7 +444,24 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 		}
 	}
 
-	// No Job exists yet. If drain is disabled, we're ready to flash directly.
+	// No Job exists. Before touching the node, ask whether it already
+	// reports the firmware we want. Without this gate the controller
+	// cordons, evicts, and spawns a Job whose only outcome is the flasher
+	// no-opping — and because a finished Job is garbage-collected after its
+	// TTL, the next reconcile sees no Job and does it all over again. That
+	// makes an already-compliant fleet churn through cordon/evict daily,
+	// with every cycle another chance to strand a node cordoned.
+	//
+	// Deliberately skipped while we hold the cordon: releasing one belongs
+	// to the uncordon path, not to this gate.
+	if nodeAtDesiredVersion(cr, &node) && node.Annotations[AnnoCordonedBy] != cr.Name {
+		ns.State = firmwarev1alpha1.NodeStateDone
+		ns.Reason = ReasonAlreadyUpToDate
+		ns.Message = MessageAlreadyUpToDate
+		return ns
+	}
+
+	// If drain is disabled, we're ready to flash directly.
 	if !drainEnabled(cr) {
 		ns.State = firmwarev1alpha1.NodeStatePending
 		return ns

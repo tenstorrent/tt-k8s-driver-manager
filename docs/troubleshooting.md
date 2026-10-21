@@ -73,6 +73,7 @@ Reason codes the firmware controller emits today:
 | `FlasherImagePullFailed` | `Flashing` | kubelet can't pull the flasher image. Check `spec.flasher.image` and `imagePullSecrets`. State stays `Flashing` — the Job's `activeDeadlineSeconds` decides when it's terminal. |
 | `FlashJobFailed` | `Failed` | Job hit a terminal failure: non-zero tt-flash exit, readback mismatch, or the flash deadline. `kubectl logs job/<lastFlashJob>` distinguishes them. |
 | `FlashSucceeded` | `Done` | Job completed and no uncordon was owed. |
+| `AlreadyUpToDate` | `Done` | Node's `firmware.tenstorrent.com/current-version` annotation already matched the target before any cordon or Job. See [Skipping already-compliant nodes](firmware.md#skipping-already-compliant-nodes). |
 | `Cordoning` / `Draining` / `Uncordoning` | (same) | Drain machinery in flight. |
 | `EvictionBlocked` | `Draining` | A PDB refused an eviction this pass. Retried every reconcile until the drain deadline. |
 | `DrainTimeout` | `Failed` | Drain window expired with pods still holding `/dev/tenstorrent`. Terminal — see the message for the blocking pods. |
