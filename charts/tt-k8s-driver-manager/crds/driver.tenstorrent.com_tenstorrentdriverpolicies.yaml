@@ -255,7 +255,7 @@ spec:
                 type: object
               version:
                 description: |-
-                  Version is the tt-kmd release, e.g. "2.8.0". Maps to the upstream tag
+                  Version is the tt-kmd release, e.g. "2.10.0". Maps to the upstream tag
                   ttkmd-<version>.
                 pattern: ^[0-9]+\.[0-9]+\.[0-9]+$
                 type: string

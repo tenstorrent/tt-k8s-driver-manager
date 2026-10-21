@@ -174,7 +174,7 @@ kind: TenstorrentDriverPolicy
 metadata:
   name: migration-test
 spec:
-  version: "2.8.0"                      # whatever DKMS was pinning, or the version you want to land on
+  version: "2.10.0"                     # whatever DKMS was pinning, or the version you want to land on
   nodeAffinity:
     matchLabels:
       kubernetes.io/hostname: node-1   # one node only for the first cut

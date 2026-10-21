@@ -48,7 +48,7 @@ kind: TenstorrentDriverPolicy
 metadata:
   name: default
 spec:
-  version: "2.8.0"      # required: a tt-kmd release tag minus ttkmd-
+  version: "2.10.0"     # required: a tt-kmd release tag minus ttkmd-
   nodeAffinity: {}      # matches all nodes; ANDed with the NFD tt-present label
   upgradePolicy:
     drain:
@@ -67,7 +67,7 @@ kind: TenstorrentFirmwarePolicy
 metadata:
   name: default
 spec:
-  version: "19.9.0"     # required: tt-system-firmware release version
+  version: "19.12.0"    # required: tt-system-firmware release version
   nodeAffinity: {}      # ANDed with the NFD tt-present label
   upgradePolicy:
     maxParallel: 1      # nodes flashing simultaneously across this CR
@@ -86,18 +86,18 @@ labels:
 ```bash
 $ kubectl get nodes -L driver.tenstorrent.com/kmd-version,tt-smi.driver.tenstorrent.com/version,driver.tenstorrent.com/install-mode,firmware.tenstorrent.com/fw-version
 NAME      STATUS   KMD-VERSION   VERSION   INSTALL-MODE   FW-VERSION
-node-1   Ready    2.8.0         5.2.0     container      19.9.0.0
-node-2   Ready    2.8.0         5.2.0     container      19.9.0.0
-node-3   Ready    2.8.0         5.2.0     container      19.9.0.0
+node-1   Ready    2.10.0        5.2.0     container      19.12.0.0
+node-2   Ready    2.10.0        5.2.0     container      19.12.0.0
+node-3   Ready    2.10.0        5.2.0     container      19.12.0.0
 ```
 
 ```bash
 $ kubectl get ttdp,ttfwp
 NAME                                                       VERSION   MATCHED   READY   FAILED
-tenstorrentdriverpolicy.driver.tenstorrent.com/default     2.8.0     3         3       0
+tenstorrentdriverpolicy.driver.tenstorrent.com/default     2.10.0    3         3       0
 
 NAME                                                         VERSION   MATCHED   UPTODATE   INPROGRESS   FAILED
-tenstorrentfirmwarepolicy.firmware.tenstorrent.com/default   19.9.0    3         3          0            0
+tenstorrentfirmwarepolicy.firmware.tenstorrent.com/default   19.12.0   3         3          0            0
 ```
 
 ## What gets installed where
