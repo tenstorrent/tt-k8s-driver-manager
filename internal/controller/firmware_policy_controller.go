@@ -33,7 +33,9 @@ import (
 //
 // Reconciliation model: per-CR, the controller walks each matching node and
 // decides whether to spawn a flash Job. The source of truth for "where is
-// this node in the upgrade" is the Job's existence + status; the
+// this node in the upgrade" is the Job's existence + status while the Job
+// lives, and the firmware.tenstorrent.com/current-version annotation
+// (stamped on Done) after the Job has been garbage-collected. The
 // firmware.tenstorrent.com/upgrade-state label is a denormalized view for
 // human kubectl-grepping, not read back by the controller. Per-node Job
 // names are deterministic (jobName) so creation is idempotent.
@@ -269,12 +271,10 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				// flash. tt-smi appends a fourth component to the bundle
 				// version (a 19.8.0 bundle reads back as 19.8.0.0), so default
 				// to "<spec.version>.0" unless spec.readbackVersion overrides
-				// it. Label is for selectors; annotation is a human-readable
-				// history pointer.
-				readback := cr.Spec.ReadbackVersion
-				if readback == "" {
-					readback = cr.Spec.Version + ".0"
-				}
+				// it. Label is for selectors; the annotation is what
+				// observeNode reads back once the Job has been GC'd, so a
+				// Done node stays Done (see the current-version check there).
+				readback := readbackVersion(cr)
 				if node.Annotations[AnnoCurrentVersion] != readback {
 					_ = r.annotateNode(ctx, node, map[string]string{AnnoCurrentVersion: readback})
 				}
@@ -329,6 +329,18 @@ func (r *FirmwarePolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // matchedNodes returns nodes matching the CR's nodeAffinity AND the
 // Tenstorrent NFD label (unless REQUIRE_TT_PCI_LABEL=false).
 // Nodes carrying firmware.tenstorrent.com/skip=true are excluded.
+// readbackVersion is the version string tt-smi reports after a successful
+// flash of cr.Spec.Version. Defaults to "<spec.version>.0" — the same
+// convention as tt-ansible. Shared by the flash Job's readback assertion,
+// the Done-path node annotation, and observeNode's "already flashed"
+// short-circuit so the three can't drift apart.
+func readbackVersion(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) string {
+	if cr.Spec.ReadbackVersion != "" {
+		return cr.Spec.ReadbackVersion
+	}
+	return cr.Spec.Version + ".0"
+}
+
 func (r *FirmwarePolicyReconciler) matchedNodes(ctx context.Context, cr *firmwarev1alpha1.TenstorrentFirmwarePolicy) ([]corev1.Node, error) {
 	effSel := cr.Spec.EffectiveNodeAffinity()
 	sel, err := metav1.LabelSelectorAsSelector(&effSel)
@@ -445,6 +457,28 @@ func (r *FirmwarePolicyReconciler) observeNode(ctx context.Context, cr *firmware
 			}
 			return ns
 		}
+	}
+
+	// No Job exists. Before treating that as "never flashed", check the
+	// node's recorded current-version: the Done path stamps it with the
+	// readback version once the flash Job succeeded, and the Job itself is
+	// garbage-collected by TTLSecondsAfterFinished (24h) after that. Without
+	// this check a Done node would re-enter the state machine at Cordoning
+	// every time its Job aged out — cordoning, draining and re-flashing the
+	// fleet once a day for no reason.
+	//
+	// Same (state, reason) pairs as the Job-derived branch above, so a
+	// Job aging out is not a transition: no new LastTransitionTime, no
+	// Event.
+	if node.Annotations[AnnoCurrentVersion] == readbackVersion(cr) {
+		if drainEnabled(cr) && node.Annotations[AnnoCordonedBy] == cr.Name {
+			ns.State = firmwarev1alpha1.NodeStateUncordoning
+			ns.Reason = ReasonUncordoning
+		} else {
+			ns.State = firmwarev1alpha1.NodeStateDone
+			ns.Reason = ReasonFlashSucceeded
+		}
+		return ns
 	}
 
 	// No Job exists yet. If drain is disabled, we're ready to flash directly.

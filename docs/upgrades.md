@@ -97,9 +97,16 @@ Wall-clock per node: ~40s for the Job itself plus drain time if drain
 is enabled.
 
 To re-flash the SAME version (e.g. recovery from a corrupted flash),
-set `spec.flasher.forceWrite: true`. The controller deletes the
-existing Complete Job for that `(CR, node, version)` and creates a
-new one.
+set `spec.flasher.forceWrite: true`, then clear the evidence that the
+node is already done so the controller schedules a new Job for it:
+
+```bash
+kubectl annotate node <name> firmware.tenstorrent.com/current-version-
+kubectl -n tt-k8s-driver-manager-system delete job -l firmware.tenstorrent.com/node=<name>   # only if the previous Job is < 24h old
+```
+
+`forceWrite` alone does not re-flash a node the controller already
+records at the target version.
 
 ## The operator itself
 
