@@ -847,3 +847,80 @@ func toClientObjects(in []runtime.Object) []client.Object {
 	}
 	return out
 }
+
+// Regression: the flash Job has TTLSecondsAfterFinished=24h. Once it ages
+// out, a Done node must NOT re-enter the state machine at Cordoning — the
+// node's current-version annotation (stamped on Done) is the durable
+// record that the flash already happened. Before the fix, every Done node
+// was re-cordoned, drained and re-flashed once a day.
+func TestReconcile_DoneNodeStaysDoneAfterJobTTL(t *testing.T) {
+	t.Setenv("REQUIRE_TT_PCI_LABEL", "false")
+	t.Setenv("OPERATOR_NAMESPACE", "tt-operator-system")
+
+	enable := true
+	cr := newCR()
+	cr.Spec.UpgradePolicy.Drain.Enable = &enable
+	n := node("worker-0", map[string]string{
+		LabelOwnerCR:   cr.Name,
+		LabelFWVersion: readbackVersion(cr),
+	})
+	// What the Done path leaves behind once the Job has been GC'd: no
+	// cordon, no Job, just the version annotation.
+	n.Annotations = map[string]string{
+		AnnoCurrentVersion: readbackVersion(cr),
+		AnnoDesiredVersion: cr.Spec.Version,
+		AnnoLastFlashJob:   jobName(cr, n.Name, cr.Spec.Version),
+	}
+
+	r := &FirmwarePolicyReconciler{
+		Scheme: testScheme(t),
+		Client: fake.NewClientBuilder().
+			WithScheme(testScheme(t)).
+			WithObjects(cr, toClientObject(n)).
+			WithStatusSubresource(&firmwarev1alpha1.TenstorrentFirmwarePolicy{}).
+			Build(),
+	}
+
+	for i := 1; i <= 2; i++ {
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+			t.Fatalf("reconcile #%d: %v", i, err)
+		}
+	}
+
+	var after corev1.Node
+	_ = r.Get(context.Background(), types.NamespacedName{Name: n.Name}, &after)
+	if after.Spec.Unschedulable {
+		t.Error("Done node was re-cordoned after its flash Job aged out")
+	}
+	if after.Annotations[AnnoCordonedBy] != "" {
+		t.Errorf("Done node picked up cordoned-by=%q after its flash Job aged out", after.Annotations[AnnoCordonedBy])
+	}
+
+	var jobs batchv1.JobList
+	_ = r.List(context.Background(), &jobs, client.InNamespace("tt-operator-system"))
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no new flash Job for an already-flashed node, got %d", len(jobs.Items))
+	}
+
+	var got firmwarev1alpha1.TenstorrentFirmwarePolicy
+	_ = r.Get(context.Background(), types.NamespacedName{Name: cr.Name}, &got)
+	if got.Status.Summary.UpToDate != 1 {
+		t.Errorf("expected UpToDate=1, got %+v", got.Status.Summary)
+	}
+	if len(got.Status.Nodes) != 1 || got.Status.Nodes[0].State != firmwarev1alpha1.NodeStateDone {
+		t.Errorf("expected node state Done, got %+v", got.Status.Nodes)
+	}
+
+	// A version bump must still flash: the annotation no longer matches.
+	got.Spec.Version = "19.9.0"
+	if err := r.Update(context.Background(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: cr.Name}}); err != nil {
+		t.Fatalf("reconcile after bump: %v", err)
+	}
+	_ = r.Get(context.Background(), types.NamespacedName{Name: n.Name}, &after)
+	if !after.Spec.Unschedulable {
+		t.Error("node should be cordoned for the new version after a spec.version bump")
+	}
+}

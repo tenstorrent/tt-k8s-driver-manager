@@ -175,6 +175,14 @@ The controller is **idempotent at the Job level**: a Job for
 re-requested (e.g. you `kubectl delete pod` a stuck flasher) the
 Complete Job is reused as evidence that this node is done.
 
+Jobs are garbage-collected 24h after they finish
+(`ttlSecondsAfterFinished`). After that, the node's
+`firmware.tenstorrent.com/current-version` annotation (stamped when the
+node reached Done) is the evidence: a node whose annotation already
+equals the target readback version stays Done and is not cordoned,
+drained or re-flashed. To make the controller flash such a node again,
+remove the annotation.
+
 ### Watch progress
 
 ```bash
@@ -241,7 +249,7 @@ Stage: FLASH (~30s)
 | `firmware.tenstorrent.com/fw-version` | label | currentVersion after a successful flash |
 | `firmware.tenstorrent.com/owned-by` | label | which CR is reconciling this node (first-write-wins) |
 | `firmware.tenstorrent.com/upgrade-state` | label | per-node SM position |
-| `firmware.tenstorrent.com/current-version` | annotation | readback after last flash |
+| `firmware.tenstorrent.com/current-version` | annotation | readback after last flash; read back by the controller as "already flashed" once the Job is gone |
 | `firmware.tenstorrent.com/last-flash-job` | annotation | most recent flash Job name |
 | `firmware.tenstorrent.com/cordoned-by` | annotation | the CR that cordoned (so we only uncordon what we cordoned) |
 | `firmware.tenstorrent.com/cordoned-at` | annotation | RFC3339 — drain timeout reference |

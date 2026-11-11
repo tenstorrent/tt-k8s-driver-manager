@@ -376,17 +376,19 @@ You bumped `TenstorrentFirmwarePolicy.spec.flasher.image` (or
 `forceWrite`, `imagePullPolicy`, etc.) and the controller did nothing.
 
 Known limitation:
-the per-node flash Job name is hashed on `(CR name, node name, kmd
+the per-node flash Job name is hashed on `(CR name, node name, firmware
 version)`. The flasher fields are NOT in the hash. If a Job already
-exists at that name with `Completed` status, the controller treats
-the node as Done.
+exists at that name with `Completed` status, or the node's
+`firmware.tenstorrent.com/current-version` annotation already equals
+the target readback version, the controller treats the node as Done.
 
 Workarounds until #42 ships a fix:
-- Bump `spec.version` (forces a new Job name).
-- Delete the per-node Job:
-  `kubectl -n tt-k8s-driver-manager-system delete job -l driver.tenstorrent.com/cr=<name>,driver.tenstorrent.com/node=<node>`.
-- Wait out the 24h Job TTL — the next reconcile will spawn a fresh
-  Job that picks up the new flasher fields.
+- Bump `spec.version` (forces a new Job name and a new readback target).
+- Clear the node's done-evidence so the next reconcile spawns a fresh
+  Job that picks up the new flasher fields:
+  `kubectl annotate node <node> firmware.tenstorrent.com/current-version-`
+  and, if the previous Job is less than 24h old,
+  `kubectl -n tt-k8s-driver-manager-system delete job -l firmware.tenstorrent.com/cr=<name>,firmware.tenstorrent.com/node=<node>`.
 
 ## Multiple policies match the same node — `MessageNodeConflict`
 
@@ -416,15 +418,16 @@ delete it.
 ## CR keeps re-flashing despite node being at the right version
 
 The firmware controller's "this node is done" signal is a `Complete`
-Job in its own namespace. If you (a) moved the controller to a new
-namespace, or (b) deleted all old flash Jobs, the controller has no
-record that the node was flashed and re-runs.
+Job in its own namespace or, once that Job has been garbage-collected
+(24h TTL), the node's `firmware.tenstorrent.com/current-version`
+annotation. A node with neither — a freshly joined node, a fleet that
+was flashed out-of-band before the CR existed, or a node whose
+annotation was removed — goes through one cordon/drain/flash cycle.
 
 Pre-flash readback (inside the flasher Job) will report the existing
 version matches the desired, and tt-flash with `--force=false` will
-no-op. So it's harmless, just slow. The node's `current-version`
-annotation is the cheaper source of truth — bumping the controller to
-read it as a tiebreaker is open work.
+no-op. So it's harmless, just slow: the Job exits 0 and the annotation
+is stamped, so it happens once per node, not once per day.
 
 ## Controller is in a tight reconcile loop
 
