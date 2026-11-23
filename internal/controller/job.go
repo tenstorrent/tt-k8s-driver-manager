@@ -50,10 +50,7 @@ func boolEnv(b bool) string {
 // then asserts readback via tt-smi.
 func buildFlashJob(cr *firmwarev1alpha1.TenstorrentFirmwarePolicy, nodeName, defaultImage string) *batchv1.Job {
 	version := cr.Spec.Version
-	readback := cr.Spec.ReadbackVersion
-	if readback == "" {
-		readback = version + ".0"
-	}
+	readback := readbackVersion(cr)
 	bundleURL := cr.Spec.BundleURL
 	if bundleURL == "" {
 		bundleURL = fmt.Sprintf(
